@@ -35,8 +35,9 @@ export interface FileKeyStoreOptions {
     cipher?: KeyStoreCipher;
 }
 
+/** `~/.scratchbox/credentials.json`, or SCRATCHBOX_CREDENTIALS_FILE (an isolated instance that must not share the user's keys and sign-in). */
 export function defaultCredentialsPath(): string {
-    return path.join(os.homedir(), '.scratchbox', 'credentials.json');
+    return process.env.SCRATCHBOX_CREDENTIALS_FILE?.trim() || path.join(os.homedir(), '.scratchbox', 'credentials.json');
 }
 
 /**

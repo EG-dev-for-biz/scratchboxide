@@ -6,6 +6,7 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
+import { subagentModelFor } from '../common/chat-models';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
@@ -97,6 +98,8 @@ import {
 } from './gemini/tool-registry';
 import { SwarmBridge } from './gemini/swarm-bridge';
 import { StreamingEngine } from './gemini/streaming';
+import { ProviderCredentials, type KeyedProvider } from './chat-agent/provider-credentials';
+import { CHAT_MODEL_OPTIONS, type ChatModelAvailability } from '../common/chat-models';
 import { buildContents, buildSystemInstruction, type PromptContextServices } from './gemini/prompt-builder';
 import {
     extractCodeSandboxArtifact,
@@ -150,7 +153,10 @@ export class GeminiService {
         client: this.client,
         subagentExecutor: this
     });
+    /** Keys for the chat's Claude and OpenAI models (Settings' key store, then the environment). */
+    private readonly providerCredentials = new ProviderCredentials();
     private readonly streaming: StreamingEngine = new StreamingEngine({
+        providerCredentials: this.providerCredentials,
         client: this.client,
         registry: this.toolRegistry,
         mcp: this.mcp,
@@ -337,7 +343,8 @@ export class GeminiService {
         try {
             const response = await this.streaming.streamGenerate({
                 prompt: `${SUBAGENT_BRIEF}\n\nTASK:\n${task}`,
-                model: parent.subagentModel || DEFAULT_SUBAGENT_MODEL,
+                // the chat's own provider (common/chat-models.ts subagentModelFor): a Claude or OpenAI chat delegates to its own
+                model: subagentModelFor(parent.model, parent.subagentModel),
                 mode: 'ask',
                 isSubagentRun: true,
                 workspaceRoot: parent.workspaceRoot,
@@ -391,6 +398,28 @@ export class GeminiService {
 
     getActiveModel(): string {
         return this.preferredModel;
+    }
+
+    /**
+     * The chat's model picker: every listed model with whether its provider has a key on this server (never the
+     * key), and the model a chat that picked none runs on.
+     */
+    async listChatModels(): Promise<{ models: ChatModelAvailability[]; defaultModel: string }> {
+        const gemini = this.client.ensureAuth() || !!(await this.client.resolveApiKey());
+        const [anthropic, openai] = await Promise.all([
+            this.providerCredentials.isConfigured('anthropic'),
+            this.providerCredentials.isConfigured('openai')
+        ]);
+        const configured = { gemini, anthropic, openai };
+        return {
+            models: CHAT_MODEL_OPTIONS.map(m => ({ ...m, configured: configured[m.provider] })),
+            defaultModel: this.client.preferredModel
+        };
+    }
+
+    /** Saves a Claude or OpenAI key from Settings (an empty key clears it); returns whether one is still configured. */
+    async saveProviderKey(provider: KeyedProvider, apiKey: string): Promise<{ configured: boolean }> {
+        return this.providerCredentials.saveKey(provider, apiKey);
     }
 
     /** Real-time connection status of the Gemini service. */

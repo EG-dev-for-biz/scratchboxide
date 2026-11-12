@@ -19,9 +19,11 @@ vi.mock('os', async importOriginal => {
     return { ...real, totalmem: () => machine.totalMem || real.totalmem() };
 });
 
-import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, frameTransform, joinChunkGlb, planDistrictChunks } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, chunkTerritory, DISTRICT_CHUNKS_PARAMS, fastChunkIndices, frameTransform, isCellChunk, kdFastChunks, joinChunkGlb, kdBand, kdChunkUnit, KD_GROUND_CELL_STEPS, KD_SHOWN_STEPS, planDistrictChunks } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { withoutModels } from '../src/node/3d-engine/staged-location/orchestrator';
+import { cellLines, solveSeamGains } from '../src/node/3d-engine/staged-location/pipeline-k/district-seams';
 import { scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
 
@@ -57,6 +59,91 @@ describe('pipeline K-D: a district in chunks', () => {
         expect(band(112, 0)).toBe(false);
         // a small district is one build
         expect(planDistrictChunks(120, [block])).toBeUndefined();
+    });
+
+    it('with a task per building, gives each building a chunk of its own, whole, and leaves the cells the ground', () => {
+        const block = { id: 'block', centroid: [50, 0] as [number, number], loops: [rect(20, -10, 80, 10)] };
+        const east = { id: 'east', centroid: [130, 0] as [number, number], loops: [rect(110, -10, 150, 10)] };
+        const cellPlan = planDistrictChunks(350, [block, east])!;
+        const plan = planDistrictChunks(350, [block, east], DISTRICT_CHUNKS_PARAMS, 'building')!;
+        expect(plan.unit).toBe('building');
+        expect(plan.version).toBe(`${cellPlan.version}+building`);
+        // the same cells, in the same order, each its plain square plus the margin: no cell grows to a building
+        const cells = plan.chunks.filter(isCellChunk);
+        expect(cells.map(c => [c.index, c.cx, c.cz])).toEqual(cellPlan.chunks.map(c => [c.index, c.cx, c.cz]));
+        const centre = plan.chunks.find(c => c.centre)!;
+        expect(centre.rect).toEqual({ x0: -68, z0: -68, x1: 68, z1: 68 });
+        expect(cells.every(c => c.buildings.length === 0)).toBe(true);
+        // a task per building after the cells: its box grown by the reach and the margin, every building in exactly one
+        const tasks = plan.chunks.filter(c => !isCellChunk(c));
+        expect(tasks.map(t => t.buildings)).toEqual([['block'], ['east']]);
+        expect(tasks[0].index).toBe(cells.length);
+        const g = DISTRICT_CHUNKS_PARAMS.marginM + DISTRICT_CHUNKS_PARAMS.buildingReachM;
+        expect(tasks[0].rect).toEqual({ x0: 20 - g, z0: -10 - g, x1: 80 + g, z1: 10 + g });
+        expect(tasks[0].radiusM).toBe(Math.ceil(Math.hypot(30 + g, 10 + g)));
+        expect(plan.footprints.map(f => f.chunk)).toEqual([tasks[0].index, tasks[1].index]);
+        // ownership: the block, the reach past its outline (a wall scanned 0.5 m out), the street past that the cell's
+        const owner = chunkOwner(plan);
+        expect(owner(75, 0)).toBe(tasks[0].index);
+        expect(owner(75, 10.5)).toBe(tasks[0].index);
+        expect(owner(75, 12)).toBe(plan.chunks.find(c => c.cx === 120 && c.cz === 0)!.index);
+        expect(owner(30, 12)).toBe(centre.index);
+        expect(owner(400, 0)).toBe(-1);
+        // a building's task keeps no band past its edge; a cell keeps its band, never into a building
+        const blockKeeps = chunkTerritory(plan, tasks[0].index, 3);
+        expect(blockKeeps(75, 0)).toBe(true);
+        expect(blockKeeps(75, 12)).toBe(false);
+        expect(chunkTerritory(plan, centre.index, 3)(62, 40)).toBe(true);
+        expect(chunkTerritory(plan, centre.index, 3)(70, 0)).toBe(false);
+        // the seam stage's lines are the cells' alone, and only cells are levelled against each other
+        expect(cellLines(plan)).toEqual(cellLines(cellPlan));
+        const s = new Map<number, Float32Array>([[1, Float32Array.from([0, 0.5, 0.5, 0.5])]]);
+        const solved = solveSeamGains(new Map([[centre.index, s], [tasks[0].index, new Map([[1, Float32Array.from([0, 0.9, 0.9, 0.9])]])]]), plan);
+        expect(solved.gains.get(tasks[0].index)).toEqual([1, 1, 1]);
+        // a building with no outline (a centroid only) has no box: it stays with its cell, no task with a NaN place
+        const bare = planDistrictChunks(350, [block, { id: 'bare', centroid: [10, 130] as [number, number], loops: [] }], DISTRICT_CHUNKS_PARAMS, 'building')!;
+        expect(bare.chunks.filter(c => !isCellChunk(c)).map(t => t.buildings)).toEqual([['block']]);
+        expect(bare.chunks.find(c => c.cx === 0 && c.cz === 120)!.buildings).toEqual(['bare']);
+        expect(bare.chunks.every(c => [c.cx, c.cz, c.rect.x0, c.rect.z1, c.radiusM].every(Number.isFinite))).toBe(true)
+        // the fast VMs take the largest chunks, cells and building tasks alike: the cells' 136 m squares first, every chunk
+        // when there are as many VMs
+        expect([...fastChunkIndices(plan, 1)]).toEqual([cells[0].index]);
+        expect([...fastChunkIndices(plan, plan.chunks.length)].sort((a, b) => a - b)).toEqual(plan.chunks.map(c => c.index));
+        expect([...fastChunkIndices(plan, plan.chunks.length - 2)].includes(tasks[0].index)).toBe(false);
+        expect(fastChunkIndices(cellPlan, 3).size).toBe(0);
+        expect(kdFastChunks({ SCRATCHBOX_KD_FAST_CHUNKS: '6' })).toBe(6);
+        expect(kdFastChunks({})).toBe(0);
+        // the switch
+        expect(kdChunkUnit({ SCRATCHBOX_KD_CHUNK_UNIT: 'building' })).toBe('building');
+        expect(kdChunkUnit({})).toBe('cell');
+    });
+
+    it('asks each chunk for its steps: the ground steps in a building plan\'s cells, and in the shown band no model at all', () => {
+        const block = { id: 'block', centroid: [50, 0] as [number, number], loops: [rect(20, -10, 80, 10)] };
+        const cells = planDistrictChunks(350, [block])!, tasks = planDistrictChunks(350, [block], DISTRICT_CHUNKS_PARAMS, 'building')!;
+        const cell = tasks.chunks.find(c => c.centre)!, building = tasks.chunks.find(c => !isCellChunk(c))!;
+        const asked = { 'remesh.facadeRead': true, 'polish.base': false };
+        // the full band of a cell plan: the district's own steps, untouched
+        expect(chunkSteps(cells, cells.chunks[0], asked, 'full')).toBe(asked);
+        expect(chunkSteps(cells, cells.chunks[0], undefined, 'full')).toBeUndefined();
+        // a building plan's cell: its ground steps over the district's; its building task: the district's
+        expect(chunkSteps(tasks, cell, asked, 'full')).toEqual({ ...asked, ...KD_GROUND_CELL_STEPS });
+        expect(chunkSteps(tasks, building, asked, 'full')).toBe(asked);
+        // the shown band: no model, no material sets, no upscale, everywhere, over anything asked
+        expect(chunkSteps(tasks, building, asked, 'shown')).toEqual({ ...asked, ...KD_SHOWN_STEPS, 'remesh.facadeRead': true });
+        expect(chunkSteps(tasks, building, { models: true }, 'shown')!.models).toBe(false);
+        expect(chunkSteps(tasks, cell, undefined, 'shown')).toEqual({ ...KD_GROUND_CELL_STEPS, ...KD_SHOWN_STEPS });
+        expect(kdBand({ SCRATCHBOX_KD_BAND: 'shown' })).toBe('shown');
+        expect(kdBand({})).toBe('full');
+        // models off: every model client gone, the rest of the deps kept
+        const deps = { cache: {}, vision: { client: {}, candidates: ['m'] }, groundedReferences: async () => ({}), pipelineI: {}, textures: { enhance: {}, lighting: {}, maxSide: 4096 }, elevations: async () => [] } as never;
+        const off = withoutModels(deps) as unknown as Record<string, unknown>;
+        expect(off.vision).toMatchObject({ unavailable: expect.stringContaining('models off') });
+        expect(off.groundedReferences).toBeUndefined();
+        expect(off.pipelineI).toBeUndefined();
+        expect(off.textures).toEqual({ maxSide: 4096 });
+        expect(off.cache).toBe((deps as unknown as Record<string, unknown>).cache);
+        expect(off.elevations).toBe((deps as unknown as Record<string, unknown>).elevations);
     });
 
     it('plans whole every building the circle reaches, its middle past it or not, and leaves out one reaching too far', () => {

@@ -92,7 +92,11 @@ export function applySunToScene(
     const scattering: Record<string, unknown> = { enabled: true, volumetricClouds: s.clouds };
     for (const k of ['turbidity', 'cloudCoverage', 'cloudDensity', 'cloudAltitude', 'cloudLayers'] as const) if (s.config[k] !== undefined) scattering[k] = s.config[k];
     commands.push({ operator: 'sb_configure_atmospheric_scattering', params: scattering });
-    if (s.config.aerialPerspectiveEnabled === true) commands.push({ operator: 'sb_configure_aerial_perspective', params: { enabled: true } });
+    if (s.config.aerialPerspectiveEnabled === true) {
+        const haze: Record<string, unknown> = { enabled: true };
+        for (const k of ['hazeVisibilityMeters', 'fogHeight', 'fogBaseAltitude'] as const) if (s.config[k] !== undefined) haze[k] = s.config[k];
+        commands.push({ operator: 'sb_configure_aerial_perspective', params: haze });
+    }
     if (s.config.cloudShadowsEnabled === true) commands.push({ operator: 'sb_configure_terrain_cloud_shadows', params: { enabled: true } });
     if (s.config.godRays) commands.push({ operator: 'sb_add_volumetric_god_rays', params: { enabled: true, ...(typeof (s.config.godRays as { intensity?: number }).intensity === 'number' ? { intensity: (s.config.godRays as { intensity: number }).intensity } : {}) } });
     const batch = engine.executeBatch(commands, { atomic: true });
@@ -170,7 +174,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             type: 'OBJECT',
             properties: {
                 sunElevationDeg: { type: 'NUMBER', description: 'Sun elevation above the horizon in degrees (with sunAzimuthDeg).' },
-                sunAzimuthDeg: { type: 'NUMBER', description: 'Sun azimuth in degrees clockwise from north (with sunElevationDeg).' },
+                sunAzimuthDeg: { type: 'NUMBER', description: 'Sun azimuth in degrees clockwise from north (with sunElevationDeg). In the scene, north is -z and east +x: 0 toward -z, 90 toward +x, as path_trace_render takes it. For a scene built for a shot, hero.sun_azimuth_deg(frame_x) gives it from the frame (-1.5 ahead and to the left).' },
                 preset: {
                     type: 'STRING',
                     description: 'Diurnal preset: "dawn", "golden_hour", "midday", "afternoon", "sunset", "twilight", "blue_hour", "night", or "overcast".'
@@ -194,6 +198,18 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 enableAerialPerspective: {
                     type: 'BOOLEAN',
                     description: 'Depth inscattering aerial perspective (haze with distance); on with the sky unless false.'
+                },
+                visibilityMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional: a grey haze of this visibility at ground level, in metres (the distance at which a dark object fades to 2% contrast: a clear day tens of kilometres, a hazy city 2000-5000, mist a few hundred), drawn on top of the sky\'s own aerial perspective and thinned with height by hazeScaleHeightMeters; path_trace_render of this scene draws the same haze. Omitted adds no haze.'
+                },
+                hazeScaleHeightMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional: makes the haze hug the ground. The height, in metres, over which the haze thins to about a third (e-fold): 30-80 for street haze or ground mist under clear upper air, a few hundred for a deep haze layer. A camera above the layer then sees the street fade while rooftops and the far skyline stay clearer. Omitted means the same haze at every height.'
+                },
+                hazeBaseAltitudeMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional, with hazeScaleHeightMeters: the height the haze is densest at and below (default 0, the scene ground).'
                 },
                 enableGodRays: {
                     type: 'BOOLEAN',
@@ -447,6 +463,17 @@ export const atmosphereHandlers: Record<string, ToolHandler> = {
             aerialPerspectiveEnabled: args.enableAerialPerspective !== false
         };
         if (num(args.turbidity) !== undefined) config.turbidity = num(args.turbidity);
+        const visibilityM = num(args.visibilityMeters), hazeScaleM = num(args.hazeScaleHeightMeters), hazeBaseM = num(args.hazeBaseAltitudeMeters);
+        if (visibilityM !== undefined) {
+            if (visibilityM <= 0) throw new Error(`atmosphere_configure_scene: visibilityMeters ${visibilityM} must be above 0.`);
+            config.hazeVisibilityMeters = visibilityM;
+            config.aerialPerspectiveEnabled = true;
+        }
+        if (hazeScaleM !== undefined) {
+            if (hazeScaleM <= 0) throw new Error(`atmosphere_configure_scene: hazeScaleHeightMeters ${hazeScaleM} must be above 0.`);
+            config.fogHeight = hazeScaleM;
+            config.fogBaseAltitude = hazeBaseM ?? 0;
+        }
         if (lat !== undefined && lng !== undefined) { config.latitude = lat; config.longitude = lng; }
         if (clouds) {
             config.cloudCoverage = cloudCoverage;

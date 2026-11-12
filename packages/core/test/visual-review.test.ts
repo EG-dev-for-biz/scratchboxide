@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildReviewPrompt, describeVisualProblems, parseReviewReply, reviewModelVisually } from '../src/node/3d-engine/visual-review';
+import { buildReviewPrompt, describeVisualProblems, parseReviewReply, renderReviewViews, reviewModelVisually } from '../src/node/3d-engine/visual-review';
+import { decodePng } from '../src/node/texture-processing';
 import type { TriangleSoup } from '../src/node/3d-engine/part-connectivity';
 
 // A unit cube is enough to exercise rendering; the model's judgement is checked live, not here.
@@ -52,5 +53,17 @@ describe('visual review', () => {
         const prompt = buildReviewPrompt('a chair', '', ['side view']);
         expect(prompt).toMatch(/Do not comment on colour, material/);
         expect(prompt).toMatch(/JSON only/);
+    });
+});
+
+describe('visual review of a large scene', () => {
+    it('draws a model more than a kilometre across (the camera stands off past the default far plane)', () => {
+        // the unit cube scaled to 1.2 km: the review camera stands about 3 km away
+        const big: TriangleSoup = { positions: cube.positions.map(v => v * 1200), indices: cube.indices };
+        const [view] = renderReviewViews(big, 128);
+        const { data } = decodePng(view.png);
+        let drawn = 0;
+        for (let i = 0; i < data.length; i += 4) if (data[i] !== 236 || data[i + 1] !== 238 || data[i + 2] !== 242) drawn++;
+        expect(drawn).toBeGreaterThan(128 * 128 * 0.1);
     });
 });

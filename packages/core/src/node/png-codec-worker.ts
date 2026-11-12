@@ -17,6 +17,7 @@ import { parentPort } from 'worker_threads';
 import { encodePng } from './3d-engine/staged-location/png-encode';
 import { decodePng } from './texture-processing';
 import type { PngCodecReply, PngCodecRequest } from './png-codec-pool';
+import { delightImage } from './3d-engine/staged-location/pipeline-k/twin-delight';
 
 /** `bytes` as an ArrayBuffer of exactly its length, safe to transfer (its own buffer when it fills it, else a copy). */
 function transferable(bytes: Uint8Array): ArrayBuffer {
@@ -32,6 +33,10 @@ parentPort!.on('message', (m: PngCodecRequest) => {
         if (m.op === 'encode') {
             const out = transferable(encodePng(m.width, m.height, new Uint8Array(m.pixels), m.channels));
             parentPort!.postMessage({ id: m.id, bytes: out } satisfies PngCodecReply, [out]);
+        } else if (m.op === 'delight') {
+            const d = delightImage({ width: m.width, height: m.height, rgba: new Uint8Array(m.pixels) }, m.surface ? new Uint8Array(m.surface) : undefined, m.upMask ? { mask: new Uint8Array(m.upMask), shadowLift: m.upLift ?? 0 } : undefined);
+            const out = transferable(d.rgba);
+            parentPort!.postMessage({ id: m.id, width: d.width, height: d.height, bytes: out } satisfies PngCodecReply, [out]);
         } else {
             const d = decodePng(Buffer.from(m.png));
             const out = transferable(d.rgba);

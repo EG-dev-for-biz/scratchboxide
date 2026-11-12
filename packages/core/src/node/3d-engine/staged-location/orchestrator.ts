@@ -208,7 +208,7 @@ import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { describeMirrorFill, describeMirrorWindows, describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, symmetryFillOn, symmetryOn, symmetryWindowsOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, fastChunkIndices, isCellChunk, kdFastChunks, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
@@ -225,7 +225,7 @@ import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-re
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
 import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, mergeReadings, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
-import { describeWindowArrays, inferWindowArrays, WINDOW_ARRAY_VERSION } from './pipeline-k/window-array';
+import { describeWindowArrays, inferWindowArrays, inferWindowArraysOnThreads, WINDOW_ARRAY_VERSION, type ArrayOutput } from './pipeline-k/window-array';
 import { BUILDING_SYSTEM_VERSION, readBuildingSystem, type BuildingSystem } from './pipeline-k/building-system';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
 import { fileReadingStore, MODEL_READINGS_DIR, modelReadingsDir, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
@@ -1592,9 +1592,23 @@ function activeSceneReport(run: StagedRun): StagedActiveSceneReport | undefined 
     };
 }
 
+/**
+ * The deps with every model client taken out (request.steps.models false): the vision chain (the facade reader, the
+ * building system, the window reader, vehicles, material naming, picks and finishes, the upscale), the texture pass's
+ * enhancement and lighting models, the grounded references and pipeline J's paid services. Each stage that needed one
+ * then runs its own model-free path, as it does where no model is configured, and says so.
+ */
+export function withoutModels(deps: StagedLocationDeps): StagedLocationDeps {
+    const { groundedReferences: _g, pipelineI: _i, ...rest } = deps;
+    const textures = deps.textures ? (({ enhance: _e, lighting: _l, ...t }) => t)(deps.textures) : undefined;
+    return { ...rest, vision: { unavailable: 'no model is asked in this build (models off: the district\'s shown band, its model-refined detail after)' }, ...(textures ? { textures } : {}) };
+}
+
 export async function runStagedLocation(requestIn: StagedLocationRequest, deps: StagedLocationDeps, ctx: StagedLocationContext = {}): Promise<StagedLocationOutcome> {
     // every request to the vision models this run makes is kept to the process's call budget and counted (model_calls note)
     const modelCalls = new ModelCallMeter();
+    // `models` off (a district's shown band, district-chunks.ts KD_SHOWN_STEPS): this build asks no model anything
+    if (requestIn.steps?.models === false) deps = withoutModels(deps);
     if (deps.vision && 'client' in deps.vision) deps = { ...deps, vision: { ...deps.vision, client: budgetedClient(deps.vision.client, { meter: modelCalls }) } };
     const now = deps.now ?? Date.now;
     const cache = deps.cache;
@@ -1722,12 +1736,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the buildings the circle may reach too (their middles up to the edge growth past it): each planned whole or left out
                 const reach = radius + DISTRICT_CHUNKS_PARAMS.edgeGrowthM;
                 const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: reach });
-                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
+                // a task per building only where every chunk, the centre too, builds in the cloud: a centre built here would
+                // rebuild its cell's buildings only for them to be cut away
+                let unit = kdChunkUnit();
+                if (unit === 'building' && kdCentreRunner() !== 'cloud') {
+                    unit = 'cell';
+                    run.note(PROVENANCE.asScanned, 'a task per building (SCRATCHBOX_KD_CHUNK_UNIT=building) needs the cloud chunk runner with its centre in the cloud: the district is built by cells');
+                }
+                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })), DISTRICT_CHUNKS_PARAMS, unit);
                 if (chunkPlan) {
                     // the whole plan, footprints too: the seam stage's ownership can be rebuilt from it offline
                     cache.writeRunNote(runId, 'district_chunks', chunkPlan);
                     const owner = chunkOwner(chunkPlan), centre = chunkPlan.chunks.find(c => c.centre)!;
-                    run.note(PROVENANCE.asScanned, `chunked district (${DISTRICT_CHUNKS_VERSION}): the ${Math.round(radius)} m asked for cut into ${chunkPlan.chunks.length} chunks of ${chunkPlan.cellM} m, each building whole in one of them; this build is the centre one (${Math.round(centre.radiusM)} m), the others are built alongside it and joined`);
+                    const cellCount = chunkPlan.chunks.filter(isCellChunk).length;
+                    run.note(PROVENANCE.asScanned, chunkPlan.unit === 'building'
+                        ? `chunked district (${chunkPlan.version}): the ${Math.round(radius)} m asked for cut into ${cellCount} cells of ${chunkPlan.cellM} m for the ground, streets and trees, and a task of its own for each of its ${chunkPlan.chunks.length - cellCount} buildings, each whole; every chunk is built alongside the others and joined`
+                        : `chunked district (${DISTRICT_CHUNKS_VERSION}): the ${Math.round(radius)} m asked for cut into ${chunkPlan.chunks.length} chunks of ${chunkPlan.cellM} m, each building whole in one of them; this build is the centre one (${Math.round(centre.radiusM)} m), the others are built alongside it and joined`);
                     run.layerTransform = chainLayerTransforms(run.layerTransform, territoryClipper(run, cache, chunkTerritory(chunkPlan, centre.index, DISTRICT_CHUNKS_PARAMS.seamBandM), (x, z) => owner(x, z) === centre.index));
                 }
             } catch (err) {
@@ -1909,6 +1933,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const chunksPromise = !plan ? Promise.resolve(undefined) : runner.stage<{ chunks: number; joined: number; failed: number }>({
             id: 'chunks',
             run: async io => {
+                const chunksStartMs = now();
                 const tiles = centreInCloud ? undefined : await tilesReady;
                 if (!tiles && !centreInCloud) return { status: 'skipped', source: '', reason: 'the centre build has no tiles to join the chunks to' };
                 // the district's frame: the centre build's tiles; with the centre in the cloud, its job's frame once it is back
@@ -1919,7 +1944,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (!centreInCloud) centreFrame.resolve(here);
                 const owner = chunkOwner(plan);
                 // with the centre in the cloud it is one of them, the first (nearest)
-                const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort((a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
+                // a task per building: the centre first (the others cut in its frame), then the largest extractions first, so the
+                // longest builds start first and, with the pool in several regions, the largest land in different regions;
+                // otherwise nearest first
+                const area = (c: DistrictChunk) => (c.rect.x1 - c.rect.x0) * (c.rect.z1 - c.rect.z0);
+                // the largest building tasks marked for the fast VMs (SCRATCHBOX_KD_FAST_CHUNKS)
+                const fast = fastChunkIndices(plan, kdFastChunks());
+                const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort(plan.unit === 'building'
+                    ? (a, b) => Number(b.centre) - Number(a.centre) || area(b) - area(a) || a.index - b.index
+                    : (a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
                 // several at once, as memory allows (a district build holds several GB), the centre build running beside them (here,
                 // or with the centre in the cloud as the first of them)
                 const parallel = chunkParallel();
@@ -1961,6 +1994,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 };
                 let next = 0, joined = 0;
+                // set below, once the seam stage's start is wired: a cell that has joined or failed for good
+                let settleCell: (c: DistrictChunk) => void = () => undefined;
                 const retry: Array<DistrictChunkPlan['chunks'][number]> = [];
                 const one = async (c: DistrictChunkPlan['chunks'][number], atOnce: number, last = false) => {
                     const t0 = now();
@@ -1971,10 +2006,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             query: request.query, isolate: false, radiusM: c.radiusM, trees: request.trees, stageIntoActiveScene: false, district: 'kd',
                             // the centre keeps the hero's address: its scene is the one the district is published on
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: c.centre ? placeValue!.formattedAddress : `${placeValue!.formattedAddress} (chunk ${c.index})` },
-                            ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
+                            ...(request.enhance !== undefined ? { enhance: request.enhance } : {}),
+                            // with a task per building a cell builds its ground with K's facade work off (its buildings are the tasks');
+                            // in the shown band no chunk calls a model (district-chunks.ts chunkSteps)
+                            ...((s => s ? { steps: s } : {})(chunkSteps(plan, c, request.steps, kdBand()))),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
                         }, {
-                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,
+                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce, ...(fast.has(c.index) ? { fast: true } : {}),
                             // the district's frame when known already (the centre built here); else the centre job publishes it to the
                             // others (district-chunks.ts cutChunkLayer)
                             cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM }
@@ -2033,6 +2071,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         committed.push(...batch);
                         joined++;
                         retirePlaceholders(c.index);
+                        settleCell(c);
                         join.ms = now() - tJoin;
                         io.progress(`chunk ${c.index}: joined in ${(join.ms / 1000).toFixed(1)} s (${join.files} files, ${(join.bytesIn / 1e6).toFixed(0)} MB in, ${join.cutByJob} cut by its build${join.cutHere ? `, ${join.cutHere} cut here` : ''})`);
                         const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
@@ -2050,6 +2089,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (!last && c.centre) { io.progress(`the centre chunk failed (${errorMessage(err)}); it is built again`); return one(c, atOnce, true); }
                         if (!last) { retry.push(c); io.progress(`chunk ${c.index} failed (${errorMessage(err)}); it is built again after the others`); return; }
                         if (c.centre) centreFrame.resolve(undefined);
+                        settleCell(c);
                         report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: 'failed', ms: now() - t0, error: errorMessage(err) });
                         degradations.push(run.degrade(record('chunks', 'chunk_failed', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${c.buildings.length} buildings and ground at leaf LOD`, fellTo: "the vector buildings past the centre build's tiles",
@@ -2057,6 +2097,145 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         })));
                     }
                 };
+                const closeSeams = async (): Promise<Record<string, unknown> | undefined> => {
+                    let seams: Record<string, unknown> | undefined;
+                    if (joined) {
+                        // the centre build's own ground, its texture and its streets are committed first
+                        for (const id of ['remesh', 'textures', 'textures-late', 'roads'] as StageId[]) {
+                            while (['pending', 'running'].includes(run.summary(id).status)) {
+                                if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                                await new Promise(r => setTimeout(r, 5_000));
+                            }
+                        }
+                        const t1 = now();
+                        const centreIndex = plan.chunks.find(c => c.centre)!.index;
+                        const chunkOf = (l: StagedLayer) => (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk ?? centreIndex;
+                        const shown = run.state.layers.filter(l => !l.retired);
+                        const hiddenNow = new Set(shown.flatMap(l => l.supersedes));
+                        // the order the chunks were built (the centre, then nearest first): a later chunk's cut edge moves onto an earlier one's
+                        const dist = (l: StagedLayer) => { const c = plan.chunks[chunkOf(l)]; return c.centre ? -1 : Math.hypot(c.cx, c.cz); };
+                        // a building's task (plan.unit 'building') is not seamed: its job cut it to its footprint, it meets no cell line
+                        // and keeps a gain of 1 (district-seams.ts); only the cells' grounds and streets go through the seam stage
+                        const seamed = (l: StagedLayer) => !!plan.chunks[chunkOf(l)] && isCellChunk(plan.chunks[chunkOf(l)]);
+                        const grounds = shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId) && seamed(l)).sort((a, b) => dist(a) - dist(b));
+                        if (grounds.length >= 2) {
+                            const dir = path.join(cache.dir, 'district-chunks', runId);
+                            fs.mkdirSync(dir, { recursive: true });
+                            const read = (url: string) => fs.readFileSync(path.join(cache.modelsDir, path.basename(url)));
+                            // 1. colour: each textured ground sampled in the bands either side of the cell lines, one gain per chunk
+                            const samples = new Map<number, SeamSamples>();
+                            for (const g of grounds) {
+                                if (!g.textured) continue;
+                                if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                                io.progress(`reading the colour where chunk ${chunkOf(g)} meets its neighbours`);
+                                samples.set(chunkOf(g), sampleSeamColour(read(g.textured.url), plan));
+                                await new Promise(r => setImmediate(r));
+                            }
+                            const { gains, fields, report: colour } = solveSeamGains(samples, plan);
+                            // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did.
+                            // A chunk's streets count as its surface: each chunk carved its own ground under its own streets
+                            const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId) && seamed(l)).sort((a, b) => dist(a) - dist(b));
+                            const coverage = new Map<number, SeamCoverage>();
+                            for (const g of grounds) {
+                                const c = chunkOf(g);
+                                coverage.set(c, seamCoverage([read(g.url), ...streets.filter(s => chunkOf(s) === c).map(s => read(s.url))]));
+                                await new Promise(r => setImmediate(r));
+                            }
+                            const seamOwnerOf = seamOwner(plan, coverage, grounds.map(chunkOf));
+                            // 2-4. each chunk's ground cut at its cell lines, snapped onto the chunks before it, its gain applied
+                            const edges: SeamEdges = new Map();
+                            const cuts: Array<{ chunk: number; clay: SeamCutReport; gain?: [number, number, number]; gainMode?: string }> = [];
+                            for (const g of grounds) {
+                                if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                                const c = chunkOf(g);
+                                io.progress(`closing chunk ${c}'s seams (${cuts.length + 1} of ${grounds.length})`);
+                                const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${g.url}`).digest('hex').slice(0, 8);
+                                const clay = cutChunkLayer(read(g.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
+                                fs.writeFileSync(path.join(dir, `ground_${c}.glb`), clay.glb);
+                                const pubClay = cache.publishFile(path.join(dir, `ground_${c}.glb`), `${base}_kd_ground_${c}_${key8}.glb`);
+                                let pubTex: { url: string; bytes: number } | undefined, gainMode: string | undefined;
+                                const gain = gains.get(c);
+                                if (g.textured) {
+                                    const tex = cutChunkLayer(read(g.textured.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
+                                    const levelled = applySeamGain(tex.glb, gain ?? [1, 1, 1], fields.get(c));
+                                    gainMode = levelled.mode;
+                                    fs.writeFileSync(path.join(dir, `ground_${c}_tex.glb`), levelled.glb);
+                                    pubTex = cache.publishFile(path.join(dir, `ground_${c}_tex.glb`), `${base}_kd_ground_tex_${c}_${key8}.glb`);
+                                }
+                                addSeamEdges(edges, clay.edges);
+                                const note = `chunk ${c}'s ground cut at its cell lines (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there, ${clay.report.snapped} cut corners moved at most ${Math.round(clay.report.maxSnapM * 100)} cm onto the edge its neighbour left${gain && gainMode !== 'none' ? `; its photos levelled to its neighbours' by a gain of ${gain.map(x => x.toFixed(3)).join(' / ')}${fields.get(c)?.lines.length ? ` and a correction fading in over its last ${DISTRICT_SEAMS_PARAMS.featherM} m to each neighbour` : ''} (generated)` : ''}`;
+                                const layer: StagedLayer = {
+                                    ...g, objectId: `${g.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `ground_${c}.glb`)),
+                                    supersedes: [g.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [g.objectId] },
+                                    ...(g.textured && pubTex ? { textured: { ...g.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
+                                    provenance: { ...g.provenance, note: `${g.provenance.note ? `${g.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
+                                };
+                                const meta = run.layerMeta[g.objectId];
+                                run.commit(layer, { ...meta, extra: { ...(meta?.extra ?? {}), chunk: c } });
+                                if (meta?.isGround) run.setGround(layer.objectId);
+                                committed.push(layer);
+                                run.emit('chunks', 'running', { message: `chunk ${c}'s seams closed`, layers: [layer] }, true);
+                                cuts.push({ chunk: c, clay: clay.report, ...(gain ? { gain } : {}), ...(gainMode ? { gainMode } : {}) });
+                                await new Promise(r => setImmediate(r));
+                            }
+                            // 5. SB-Roadie's streets (l1r): each joined with the seam band past its cell like the ground, so a street crossing
+                            // a cell line was drawn twice there. A street is kept by whoever keeps the ground there (seamOwnerOf), cut exactly
+                            // at the cell lines; both chunks measured it on the same tiles, so its cut edge stays where it was measured (no
+                            // snap) and its colour as drawn (no gain)
+                            const roads: Array<{ chunk: number; objectId: string; clay: SeamCutReport; textured?: SeamCutReport }> = [];
+                            for (const listed of streets) {
+                                if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                                // as it stands now: a street may have been committed again since it was listed (coloured again from a
+                                // ground committed above), and the cut keeps that
+                                const s = run.state.layers.find(l => l.objectId === listed.objectId) ?? listed;
+                                const c = chunkOf(s), meta = run.layerMeta[s.objectId];
+                                io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
+                                const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
+                                const subject = "as measured: the chunk's streets";
+                                const clay = cutChunkLayer(read(s.url), plan, c, { owner: seamOwnerOf, subject });
+                                const tex = s.textured ? cutChunkLayer(read(s.textured.url), plan, c, { owner: seamOwnerOf, subject }) : undefined;
+                                roads.push({ chunk: c, objectId: s.objectId, clay: clay.report, ...(tex ? { textured: tex.report } : {}) });
+                                // every triangle of it is its neighbours' to draw: the joined layer goes
+                                if (clay.report.trianglesIn <= clay.report.dropped && !clay.report.skippedPrimitives) {
+                                    run.commit({ ...s, retired: true }, meta);
+                                    continue;
+                                }
+                                fs.writeFileSync(path.join(dir, `roads_${c}_${key8}.glb`), clay.glb);
+                                const pubClay = cache.publishFile(path.join(dir, `roads_${c}_${key8}.glb`), `${base}_kd_roads_${c}_${key8}.glb`);
+                                let pubTex: { url: string; bytes: number } | undefined;
+                                if (tex) {
+                                    fs.writeFileSync(path.join(dir, `roads_${c}_${key8}_tex.glb`), tex.glb);
+                                    pubTex = cache.publishFile(path.join(dir, `roads_${c}_${key8}_tex.glb`), `${base}_kd_roads_tex_${c}_${key8}.glb`);
+                                }
+                                const note = `chunk ${c}'s streets cut at its cell lines by who keeps the ground there (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there and ${clay.report.dropped} left to its neighbours; the cut edge where it was measured, its colour as drawn`;
+                                const layer: StagedLayer = {
+                                    ...s, objectId: `${s.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `roads_${c}_${key8}.glb`)),
+                                    supersedes: [s.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [s.objectId] },
+                                    ...(s.textured && pubTex ? { textured: { ...s.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
+                                    provenance: { ...s.provenance, note: `${s.provenance.note ? `${s.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
+                                };
+                                run.commit(layer, { ...meta, extra: { ...(meta?.extra ?? {}), chunk: c } });
+                                committed.push(layer);
+                                run.emit('chunks', 'running', { message: `chunk ${c}'s streets cut at its cell lines`, layers: [layer] }, true);
+                                await new Promise(r => setImmediate(r));
+                            }
+                            const before = colour.pairs.map(p => p.stepBeforePct).sort((a, b) => a - b), after = colour.pairs.map(p => p.stepAfterFieldPct ?? p.stepAfterPct).sort((a, b) => a - b);
+                            const med = (v: number[]) => (v.length ? v[v.length >> 1] : 0);
+                            run.note(PROVENANCE.remeshed, `the ${grounds.length} chunks' ground joined (${DISTRICT_SEAMS_VERSION}): each cut exactly at its cell lines and its cut edge moved onto its neighbour's (at most ${DISTRICT_SEAMS_PARAMS.snapM * 100} cm); the colour step where chunks meet, median ${med(before)}% before and ${med(after)}% after a gain per chunk and a correction fading in over each chunk's last ${DISTRICT_SEAMS_PARAMS.featherM} m (generated)${roads.length ? `; SB-Roadie's streets (${roads.length} layers) cut at the same lines by the same owner, ${roads.reduce((n, r) => n + r.clay.cut, 0)} triangles cut there` : ''}`);
+                            seams = { version: DISTRICT_SEAMS_VERSION, grounds: grounds.length, colour, cuts, roads, ms: now() - t1 };
+                        }
+                    }
+                    return seams;
+                };
+                // with a task per building the seam stage, which reads only the cells, starts once every cell has joined (or failed
+                // for good), alongside the building tasks still building: the cells land minutes before the largest building
+                const streamSeams = plan.unit === 'building';
+                const cellsLeft = { n: todo.filter(isCellChunk).length };
+                const cellsSettled = deferred<void>();
+                if (!cellsLeft.n) cellsSettled.resolve();
+                settleCell = (c: DistrictChunk) => { if (streamSeams && isCellChunk(c) && --cellsLeft.n === 0) cellsSettled.resolve(); };
+                const seamsStreamed = streamSeams ? cellsSettled.promise.then(() => { io.progress('every cell joined: closing the seams while the buildings finish'); return closeSeams(); }) : Promise.resolve(undefined);
+                seamsStreamed.catch(() => undefined);
                 const width = Math.min(parallel, todo.length);
                 try {
                     await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
@@ -2069,141 +2248,25 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left
                 // there; each committed in place of the chunk's joined ground; then SB-Roadie's streets cut the same way, by the
                 // same owner. Never the district's ground in memory at once ----
-                let seams: Record<string, unknown> | undefined;
-                if (joined) {
-                    // the centre build's own ground, its texture and its streets are committed first
-                    for (const id of ['remesh', 'textures', 'textures-late', 'roads'] as StageId[]) {
-                        while (['pending', 'running'].includes(run.summary(id).status)) {
-                            if (io.signal.aborted) throw io.signal.reason ?? abortError();
-                            await new Promise(r => setTimeout(r, 5_000));
-                        }
-                    }
-                    const t1 = now();
-                    const centreIndex = plan.chunks.find(c => c.centre)!.index;
-                    const chunkOf = (l: StagedLayer) => (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk ?? centreIndex;
-                    const shown = run.state.layers.filter(l => !l.retired);
-                    const hiddenNow = new Set(shown.flatMap(l => l.supersedes));
-                    // the order the chunks were built (the centre, then nearest first): a later chunk's cut edge moves onto an earlier one's
-                    const dist = (l: StagedLayer) => { const c = plan.chunks[chunkOf(l)]; return c.centre ? -1 : Math.hypot(c.cx, c.cz); };
-                    const grounds = shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
-                    if (grounds.length >= 2) {
-                        const dir = path.join(cache.dir, 'district-chunks', runId);
-                        fs.mkdirSync(dir, { recursive: true });
-                        const read = (url: string) => fs.readFileSync(path.join(cache.modelsDir, path.basename(url)));
-                        // 1. colour: each textured ground sampled in the bands either side of the cell lines, one gain per chunk
-                        const samples = new Map<number, SeamSamples>();
-                        for (const g of grounds) {
-                            if (!g.textured) continue;
-                            if (io.signal.aborted) throw io.signal.reason ?? abortError();
-                            io.progress(`reading the colour where chunk ${chunkOf(g)} meets its neighbours`);
-                            samples.set(chunkOf(g), sampleSeamColour(read(g.textured.url), plan));
-                            await new Promise(r => setImmediate(r));
-                        }
-                        const { gains, fields, report: colour } = solveSeamGains(samples, plan);
-                        // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did.
-                        // A chunk's streets count as its surface: each chunk carved its own ground under its own streets
-                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
-                        const coverage = new Map<number, SeamCoverage>();
-                        for (const g of grounds) {
-                            const c = chunkOf(g);
-                            coverage.set(c, seamCoverage([read(g.url), ...streets.filter(s => chunkOf(s) === c).map(s => read(s.url))]));
-                            await new Promise(r => setImmediate(r));
-                        }
-                        const seamOwnerOf = seamOwner(plan, coverage, grounds.map(chunkOf));
-                        // 2-4. each chunk's ground cut at its cell lines, snapped onto the chunks before it, its gain applied
-                        const edges: SeamEdges = new Map();
-                        const cuts: Array<{ chunk: number; clay: SeamCutReport; gain?: [number, number, number]; gainMode?: string }> = [];
-                        for (const g of grounds) {
-                            if (io.signal.aborted) throw io.signal.reason ?? abortError();
-                            const c = chunkOf(g);
-                            io.progress(`closing chunk ${c}'s seams (${cuts.length + 1} of ${grounds.length})`);
-                            const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${g.url}`).digest('hex').slice(0, 8);
-                            const clay = cutChunkLayer(read(g.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
-                            fs.writeFileSync(path.join(dir, `ground_${c}.glb`), clay.glb);
-                            const pubClay = cache.publishFile(path.join(dir, `ground_${c}.glb`), `${base}_kd_ground_${c}_${key8}.glb`);
-                            let pubTex: { url: string; bytes: number } | undefined, gainMode: string | undefined;
-                            const gain = gains.get(c);
-                            if (g.textured) {
-                                const tex = cutChunkLayer(read(g.textured.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
-                                const levelled = applySeamGain(tex.glb, gain ?? [1, 1, 1], fields.get(c));
-                                gainMode = levelled.mode;
-                                fs.writeFileSync(path.join(dir, `ground_${c}_tex.glb`), levelled.glb);
-                                pubTex = cache.publishFile(path.join(dir, `ground_${c}_tex.glb`), `${base}_kd_ground_tex_${c}_${key8}.glb`);
-                            }
-                            addSeamEdges(edges, clay.edges);
-                            const note = `chunk ${c}'s ground cut at its cell lines (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there, ${clay.report.snapped} cut corners moved at most ${Math.round(clay.report.maxSnapM * 100)} cm onto the edge its neighbour left${gain && gainMode !== 'none' ? `; its photos levelled to its neighbours' by a gain of ${gain.map(x => x.toFixed(3)).join(' / ')}${fields.get(c)?.lines.length ? ` and a correction fading in over its last ${DISTRICT_SEAMS_PARAMS.featherM} m to each neighbour` : ''} (generated)` : ''}`;
-                            const layer: StagedLayer = {
-                                ...g, objectId: `${g.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `ground_${c}.glb`)),
-                                supersedes: [g.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [g.objectId] },
-                                ...(g.textured && pubTex ? { textured: { ...g.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
-                                provenance: { ...g.provenance, note: `${g.provenance.note ? `${g.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
-                            };
-                            const meta = run.layerMeta[g.objectId];
-                            run.commit(layer, { ...meta, extra: { ...(meta?.extra ?? {}), chunk: c } });
-                            if (meta?.isGround) run.setGround(layer.objectId);
-                            committed.push(layer);
-                            run.emit('chunks', 'running', { message: `chunk ${c}'s seams closed`, layers: [layer] }, true);
-                            cuts.push({ chunk: c, clay: clay.report, ...(gain ? { gain } : {}), ...(gainMode ? { gainMode } : {}) });
-                            await new Promise(r => setImmediate(r));
-                        }
-                        // 5. SB-Roadie's streets (l1r): each joined with the seam band past its cell like the ground, so a street crossing
-                        // a cell line was drawn twice there. A street is kept by whoever keeps the ground there (seamOwnerOf), cut exactly
-                        // at the cell lines; both chunks measured it on the same tiles, so its cut edge stays where it was measured (no
-                        // snap) and its colour as drawn (no gain)
-                        const roads: Array<{ chunk: number; objectId: string; clay: SeamCutReport; textured?: SeamCutReport }> = [];
-                        for (const listed of streets) {
-                            if (io.signal.aborted) throw io.signal.reason ?? abortError();
-                            // as it stands now: a street may have been committed again since it was listed (coloured again from a
-                            // ground committed above), and the cut keeps that
-                            const s = run.state.layers.find(l => l.objectId === listed.objectId) ?? listed;
-                            const c = chunkOf(s), meta = run.layerMeta[s.objectId];
-                            io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
-                            const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
-                            const subject = "as measured: the chunk's streets";
-                            const clay = cutChunkLayer(read(s.url), plan, c, { owner: seamOwnerOf, subject });
-                            const tex = s.textured ? cutChunkLayer(read(s.textured.url), plan, c, { owner: seamOwnerOf, subject }) : undefined;
-                            roads.push({ chunk: c, objectId: s.objectId, clay: clay.report, ...(tex ? { textured: tex.report } : {}) });
-                            // every triangle of it is its neighbours' to draw: the joined layer goes
-                            if (clay.report.trianglesIn <= clay.report.dropped && !clay.report.skippedPrimitives) {
-                                run.commit({ ...s, retired: true }, meta);
-                                continue;
-                            }
-                            fs.writeFileSync(path.join(dir, `roads_${c}_${key8}.glb`), clay.glb);
-                            const pubClay = cache.publishFile(path.join(dir, `roads_${c}_${key8}.glb`), `${base}_kd_roads_${c}_${key8}.glb`);
-                            let pubTex: { url: string; bytes: number } | undefined;
-                            if (tex) {
-                                fs.writeFileSync(path.join(dir, `roads_${c}_${key8}_tex.glb`), tex.glb);
-                                pubTex = cache.publishFile(path.join(dir, `roads_${c}_${key8}_tex.glb`), `${base}_kd_roads_tex_${c}_${key8}.glb`);
-                            }
-                            const note = `chunk ${c}'s streets cut at its cell lines by who keeps the ground there (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there and ${clay.report.dropped} left to its neighbours; the cut edge where it was measured, its colour as drawn`;
-                            const layer: StagedLayer = {
-                                ...s, objectId: `${s.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `roads_${c}_${key8}.glb`)),
-                                supersedes: [s.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [s.objectId] },
-                                ...(s.textured && pubTex ? { textured: { ...s.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
-                                provenance: { ...s.provenance, note: `${s.provenance.note ? `${s.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
-                            };
-                            run.commit(layer, { ...meta, extra: { ...(meta?.extra ?? {}), chunk: c } });
-                            committed.push(layer);
-                            run.emit('chunks', 'running', { message: `chunk ${c}'s streets cut at its cell lines`, layers: [layer] }, true);
-                            await new Promise(r => setImmediate(r));
-                        }
-                        const before = colour.pairs.map(p => p.stepBeforePct).sort((a, b) => a - b), after = colour.pairs.map(p => p.stepAfterFieldPct ?? p.stepAfterPct).sort((a, b) => a - b);
-                        const med = (v: number[]) => (v.length ? v[v.length >> 1] : 0);
-                        run.note(PROVENANCE.remeshed, `the ${grounds.length} chunks' ground joined (${DISTRICT_SEAMS_VERSION}): each cut exactly at its cell lines and its cut edge moved onto its neighbour's (at most ${DISTRICT_SEAMS_PARAMS.snapM * 100} cm); the colour step where chunks meet, median ${med(before)}% before and ${med(after)}% after a gain per chunk and a correction fading in over each chunk's last ${DISTRICT_SEAMS_PARAMS.featherM} m (generated)${roads.length ? `; SB-Roadie's streets (${roads.length} layers) cut at the same lines by the same owner, ${roads.reduce((n, r) => n + r.clay.cut, 0)} triangles cut there` : ''}`);
-                        seams = { version: DISTRICT_SEAMS_VERSION, grounds: grounds.length, colour, cuts, roads, ms: now() - t1 };
-                    }
-                }
+                const seams = streamSeams ? await seamsStreamed : await closeSeams();
                 await prefetching;
-                cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
+                // the district is shown: every chunk joined, the seams closed (the shown band's 3-minute mark is measured here)
+                const shownAtMs = now() - chunksStartMs;
+                io.progress(`district shown: ${joined} of ${todo.length} chunks joined, seams closed (${Math.round(shownAtMs / 1000)} s)`);
+                cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, shownAtMs, band: kdBand(), ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
                 // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store
                 const footprints: DistrictFootprint[] = [];
-                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, footprintsOut: footprints, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                // the shown band's objects are a preview (no model reading, material set or upscale): they never compete with a
+                // full build's in the place store, so it is neither audited nor shown from it here
+                const storeThisRun = placeStoreEnabled() && kdBand() !== 'shown';
+                if (!storeThisRun && placeStoreEnabled()) cache.writeRunNote(runId, 'place_audit', { skipped: true, reason: 'the shown band (SCRATCHBOX_KD_BAND=shown): a preview, not kept in the place store' });
+                if (storeThisRun && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, footprintsOut: footprints, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
                 // each building shown at its best (place-store-best.ts): one whose version here is worse than its stored one stands as that
                 // the frame the run's objects are kept in: this build's extraction, else (the centre in the cloud) the centre job's
                 const objectsFrame = tiles ? objectFrameOf(tiles.extraction) : cloudScan ? objectFrameOf(cloudScanOf(cloudScan)) : undefined;
-                if (placeStoreEnabled() && footprints.length && objectsFrame) {
+                if (storeThisRun && footprints.length && objectsFrame) {
                     if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
                     const best = showBestVersions({
                         runId, frame: objectsFrame, layers: run.state.layers, manifests: run.objectManifests, footprints, store: defaultDurableAssetStore(),
@@ -4634,7 +4697,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                         }
                                     } else notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, skipped: geometryAsk ? 'SCRATCHBOX_K_BUILDING_SYSTEM=0' : 'no vision model, or the facade reader off' });
                                     // the structure's roof line bounds the array's step into an unreached band at a photo's top
-                                    const wa = await timed('windowArray', async () => inferWindowArrays(k.orthosDir, wf.fit, undefined, { ...(structure ? { envelopeTopY: structure.groundY + structure.heightM } : {}), ...(system ? { system } : {}) }));
+                                    // each facade's first pass on the worker threads (the same bytes; 12-24 s on this thread for Penn's largest buildings)
+                                    const arrayOpts = { ...(structure ? { envelopeTopY: structure.groundY + structure.heightM } : {}), ...(system ? { system } : {}) };
+                                    const wa = await timed('windowArray', async () => onThreads
+                                        ? inferWindowArraysOnThreads(k.orthosDir, wf.fit, jobs => runRemeshJobs<ArrayOutput | null>(jobs.map(job => ({ kind: 'windowArrayFacade' as const, job })), { threads: cpuShare ? Math.min(cpuShare.threads, remeshWorkerThreads()) : remeshWorkerThreads(), signal: io.signal }).then(r => r.map(x => x ?? undefined)), undefined, arrayOpts)
+                                        : inferWindowArrays(k.orthosDir, wf.fit, undefined, arrayOpts));
                                     notes.write('pipeline_k_window_array', { ...wa, on: "the window fit, with the facade reader's openings merged in" });
                                     notes.note(PROVENANCE.photoInferred, describeWindowArrays(wa));
                                 } catch (err) {

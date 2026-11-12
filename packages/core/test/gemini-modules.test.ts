@@ -10,7 +10,8 @@ import {
     FALLBACK_GEMINI_MODELS,
     isModelNotFoundError,
     isTransientError,
-    maskEmail
+    maskEmail,
+    transientStatus
 } from '../src/node/gemini/gemini-client';
 import {
     ToolRegistry,
@@ -78,6 +79,10 @@ async function runClientAssertions(): Promise<void> {
     assert.ok(!isModelNotFoundError(new Error('AI request failed (500): boom')));
     assert.ok(isTransientError(new Error('AI request failed (503): overloaded')));
     assert.ok(!isTransientError(new Error('AI request failed (400): bad request')));
+    assert.equal(transientStatus(new Error('AI request failed (429): quota')), '429');
+    assert.equal(transientStatus(new Error('{"status":"RESOURCE_EXHAUSTED"}')), '429');
+    assert.equal(transientStatus(new Error('UNAVAILABLE: try later')), '503');
+    assert.equal(transientStatus(new Error('read ECONNRESET')), 'network');
 
     // 404 advances to the next candidate and the winner becomes preferred.
     const tried: string[] = [];

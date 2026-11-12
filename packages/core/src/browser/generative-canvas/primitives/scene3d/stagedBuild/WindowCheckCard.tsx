@@ -8,16 +8,23 @@
  ********************************************************************************/
 
 /**
- * The window check (user ask, 2026-11-07): when a 3D Building scene loads, a small card asks the viewer to select the
- * images, cropped from earlier builds' facade photos, whose outlined box is a window, as a CAPTCHA does. The answers
- * label the window-array sites the pipeline was least sure of (pipeline-k/window-check.ts, GET and POST
- * /3d/window-check). Once per build per session; Skip and close leave it; nothing shows when the server has no check.
- * The same card asks the blob check (street-objects/blob-check.ts, /3d/blob-check: "Select every image where the magenta
- * box is on a ..."), its heading taken from the check: `endpoints` are tried in order and the first with a check shows.
+ * The window check (user ask, 2026-11-07): when a 3D Building scene loads, a card asks the viewer to select the images,
+ * cropped from earlier builds' facade photos, whose outlined box is a window, as a CAPTCHA does. The answers label the
+ * window-array sites the pipeline was least sure of (pipeline-k/window-check.ts, GET and POST /3d/window-check). Once
+ * per build per session; Skip and close leave it; nothing shows when the server has no check. The same card asks the blob
+ * check (street-objects/blob-check.ts, /3d/blob-check: "Select every image where the magenta box is on a ..."), its
+ * heading taken from the check: `endpoints` are tried in order and the first with a check shows.
+ *
+ * Where it shows (user ask, 2026-11-08): while the build's remesh stage is running, dead time for the viewer, the card
+ * is a popup centred over the viewport (`modal`), drawn in the viewport's own chrome (viewportChrome.ts); once that stage
+ * is over, or when the check arrives at any other time, it sits unobtrusively beside the toolstrip and never blocks the
+ * view. A check open as a popup when the remesh finishes moves to that corner with its selection kept. Verify and Skip
+ * close it; a site already answered is never asked again (the server's label store decides which sites it draws).
  */
 
 import * as React from 'react';
 import { getApiBase, withApiHeaders } from '../../../../../common/api-client-config';
+import { CHROME_ACCENT, CHROME_ACCENT_FILL, CHROME_BUTTON, CHROME_BUTTON_PRIMARY, CHROME_MUTED, CHROME_PANEL, CHROME_TEXT } from './viewportChrome';
 
 interface Tile { id: string; png?: string; jpg?: string }
 /** `lead`, `subject` and `note` set the heading (the window check's when absent); `base` is the endpoint that served it. */
@@ -55,9 +62,96 @@ export async function answerWindowCheck(id: string, selected: string[], skipped:
     return res.ok && body?.success ? { stored: body.stored, controlsPassed: body.controlsPassed } : undefined;
 }
 
-const BLUE = '#1a73e8';
+/** Above the staged overlay (25), the tree stats (30) and the toolstrip (20); the popup's backdrop covers them all. */
+const CORNER_Z = 40;
+const MODAL_Z = 45;
+const CARD_CSS = '.sb-window-check button:focus-visible{outline:2px solid #56B4E9;outline-offset:2px}'
+    + '.sb-window-check-tile:hover{border-color:rgba(255,255,255,0.45)!important}'
+    + '.sb-window-check-skip:hover{background:rgba(255,255,255,0.14)!important}'
+    + '.sb-window-check-verify:hover{filter:brightness(1.1)}'
+    + '.sb-window-check-close:hover{color:#fff!important}';
 
-export const WindowCheckCard: React.FC<{ runId: string; topPx?: number; leftPx?: number; endpoints?: string[] }> = ({ runId, topPx = 12, leftPx = 72, endpoints = [WINDOW_CHECK_PATH] }) => {
+export interface WindowCheckPanelProps {
+    check: Check;
+    selected: ReadonlySet<string>;
+    state: 'idle' | 'sending' | 'thanks';
+    note: string;
+    /** Centred over the viewport on a dimmed backdrop (the remesh is running); else a card beside the toolstrip. */
+    modal: boolean;
+    topPx: number;
+    leftPx: number;
+    onToggle: (id: string) => void;
+    onSend: (skipped: boolean) => void;
+}
+
+/** The card itself, given its data: what the live card draws, and what the tests render. */
+export const WindowCheckPanel: React.FC<WindowCheckPanelProps> = ({ check, selected, state, note, modal, topPx, leftPx, onToggle, onSend }) => {
+    const dialogRef = React.useRef<HTMLDivElement>(null);
+    const isWindow = (check.base ?? WINDOW_CHECK_PATH) === WINDOW_CHECK_PATH;
+    // the popup takes the keyboard when it opens (Escape skips, Tab reaches the tiles); the corner card waits to be clicked
+    React.useEffect(() => { if (modal) dialogRef.current?.focus(); }, [modal]);
+    const place: React.CSSProperties = modal
+        ? { position: 'relative', width: 440, maxWidth: 'calc(100% - 32px)', maxHeight: 'calc(100% - 32px)', overflowY: 'auto' }
+        : { position: 'absolute', top: topPx, left: leftPx, zIndex: CORNER_Z, width: 400, maxWidth: 'calc(100% - 96px)' };
+    const dialog = (
+        <div
+            ref={dialogRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal={modal || undefined}
+            aria-label={check.detail}
+            data-testid="sb-window-check"
+            data-placement={modal ? 'popup' : 'corner'}
+            className="sb-window-check"
+            onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onSend(true); } }}
+            style={{ ...CHROME_PANEL, ...place, padding: 0, outline: 'none', pointerEvents: 'auto', userSelect: 'none' }}
+        >
+            <style>{CARD_CSS}</style>
+            <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.1)', position: 'relative' }}>
+                <div style={{ color: CHROME_MUTED, fontSize: 11, letterSpacing: 0.3, textTransform: 'uppercase' }}>{isWindow ? 'Window check' : 'Quick check'}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3, marginTop: 2, paddingRight: 20 }}>{check.lead ?? 'Select every image where the yellow box is on a'} <span style={{ color: CHROME_ACCENT }}>{check.subject ?? 'window'}</span>.</div>
+                <div style={{ color: CHROME_MUTED, marginTop: 2 }}>{check.note ?? (modal ? 'Optional, while the building is remeshed: it helps the 3D Building feature find windows. Leave the others.' : 'Optional: it helps the 3D Building feature find windows. Leave the others.')}</div>
+                <button type="button" className="sb-window-check-close" aria-label="Close the check" onClick={() => onSend(true)}
+                    style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', color: CHROME_MUTED, fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 2 }}>×</button>
+            </div>
+            {state === 'thanks'
+                ? <div role="status" style={{ padding: '14px 12px' }}>{note}</div>
+                : <>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, padding: 10 }}>
+                        {check.tiles.map((t, i) => {
+                            const on = selected.has(t.id);
+                            return (
+                                <button key={t.id} type="button" className="sb-window-check-tile" aria-pressed={on} aria-label={`Image ${i + 1}${on ? ', selected' : ''}`} onClick={() => onToggle(t.id)} data-tile={t.id}
+                                    style={{
+                                        position: 'relative', padding: 0, cursor: 'pointer', aspectRatio: '1 / 1', overflow: 'hidden', width: '100%', minWidth: 0, borderRadius: 6,
+                                        background: 'rgba(255,255,255,0.06)', border: `2px solid ${on ? CHROME_ACCENT : 'rgba(255,255,255,0.14)'}`,
+                                        boxShadow: on ? `0 0 0 2px ${CHROME_ACCENT_FILL} inset` : 'none', transition: 'border-color 120ms'
+                                    }}>
+                                    <img src={t.jpg ? `data:image/jpeg;base64,${t.jpg}` : `data:image/png;base64,${t.png}`} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', transform: on ? 'scale(0.86)' : 'none', transition: 'transform 120ms', borderRadius: 3 }} />
+                                    {on && <span aria-hidden="true" style={{ position: 'absolute', top: 4, left: 4, width: 18, height: 18, borderRadius: 9, background: CHROME_ACCENT, color: '#0b0b0e', fontSize: 12, fontWeight: 700, lineHeight: '18px', textAlign: 'center' }}>✓</span>}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px 10px', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                        <span style={{ color: CHROME_MUTED }} data-testid="sb-window-check-count">{selected.size ? `${selected.size} selected` : 'None selected yet'}</span>
+                        <span style={{ display: 'flex', gap: 6 }}>
+                            <button type="button" className="sb-window-check-skip" title="Skip this check: nothing is saved" disabled={state === 'sending'} onClick={() => onSend(true)} style={{ ...CHROME_BUTTON, padding: '5px 12px', textAlign: 'center' }}>Skip</button>
+                            <button type="button" className="sb-window-check-verify" title="Save your answers" disabled={state === 'sending'} onClick={() => onSend(false)} style={{ ...CHROME_BUTTON_PRIMARY, padding: '5px 14px', textAlign: 'center', opacity: state === 'sending' ? 0.6 : 1 }}>Verify</button>
+                        </span>
+                    </div>
+                </>}
+        </div>
+    );
+    if (!modal) return dialog;
+    return (
+        <div data-testid="sb-window-check-backdrop" style={{ position: 'absolute', inset: 0, zIndex: MODAL_Z, background: 'rgba(8, 8, 10, 0.55)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'auto', color: CHROME_TEXT }}>
+            {dialog}
+        </div>
+    );
+};
+
+export const WindowCheckCard: React.FC<{ runId: string; modal?: boolean; topPx?: number; leftPx?: number; endpoints?: string[] }> = ({ runId, modal = false, topPx = 12, leftPx = 72, endpoints = [WINDOW_CHECK_PATH] }) => {
     const [check, setCheck] = React.useState<Check | undefined>();
     const [selected, setSelected] = React.useState<Set<string>>(new Set());
     const [state, setState] = React.useState<'idle' | 'sending' | 'thanks' | 'closed'>('idle');
@@ -85,43 +179,6 @@ export const WindowCheckCard: React.FC<{ runId: string; topPx?: number; leftPx?:
     };
     const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
-    return (
-        <div
-            role="dialog"
-            aria-label={check.detail}
-            data-testid="sb-window-check"
-            onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); void send(true); } }}
-            style={{ position: 'absolute', top: topPx, left: leftPx, zIndex: 40, width: 420, maxWidth: 'calc(100% - 96px)', background: '#fff', borderRadius: 4, boxShadow: '0 4px 16px rgba(0,0,0,0.35)', fontFamily: 'Roboto, system-ui, sans-serif', overflow: 'hidden', color: '#202124' }}
-        >
-            <div style={{ background: BLUE, color: '#fff', padding: '12px 14px', position: 'relative' }}>
-                <div style={{ fontSize: 13 }}>{check.lead ?? 'Select every image where the yellow box is on a'}</div>
-                <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15 }}>{check.subject ?? 'window'}</div>
-                <div style={{ fontSize: 12, marginTop: 2 }}>{check.note ?? 'Leave the others. Optional: it helps the 3D Building feature find windows.'}</div>
-                <button type="button" className="sb-window-check-close" aria-label="Close the check" onClick={() => void send(true)} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', color: '#fff', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
-            </div>
-            {state === 'thanks'
-                ? <div role="status" style={{ padding: 16, fontSize: 13 }}>{note}</div>
-                : <>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4, padding: 4 }}>
-                        {check.tiles.map((t, i) => {
-                            const on = selected.has(t.id);
-                            return (
-                                <button key={t.id} type="button" className="sb-window-check-tile" aria-pressed={on} aria-label={`Image ${i + 1}${on ? ', selected' : ''}`} onClick={() => toggle(t.id)} data-tile={t.id}
-                                    style={{ position: 'relative', padding: 0, border: 'none', outline: on ? `3px solid ${BLUE}` : 'none', outlineOffset: -3, background: '#eee', cursor: 'pointer', aspectRatio: '1 / 1', overflow: 'hidden', width: '100%', minWidth: 0 }}>
-                                    <img src={t.jpg ? `data:image/jpeg;base64,${t.jpg}` : `data:image/png;base64,${t.png}`} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', transform: on ? 'scale(0.82)' : 'none', transition: 'transform 120ms' }} />
-                                    {on && <span aria-hidden="true" style={{ position: 'absolute', top: 3, left: 3, width: 20, height: 20, borderRadius: 10, background: BLUE, color: '#fff', fontSize: 14, lineHeight: '20px', textAlign: 'center' }}>✓</span>}
-                                </button>
-                            );
-                        })}
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderTop: '1px solid #dadce0' }}>
-                        <span style={{ fontSize: 12, color: '#5f6368' }}>{selected.size ? `${selected.size} selected` : 'None selected yet'}</span>
-                        <span style={{ display: 'flex', gap: 6 }}>
-                            <button type="button" className="sb-window-check-skip" title="Skip this check: nothing is saved" disabled={state === 'sending'} onClick={() => void send(true)} style={{ background: '#fff', color: BLUE, border: `1px solid ${BLUE}`, borderRadius: 3, padding: '7px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>SKIP</button>
-                            <button type="button" className="sb-window-check-verify" title="Save your answers" disabled={state === 'sending'} onClick={() => void send(false)} style={{ background: BLUE, color: '#fff', border: 'none', borderRadius: 3, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>VERIFY</button>
-                        </span>
-                    </div>
-                </>}
-        </div>
-    );
+    // the thank-you note never holds the viewport: it goes to the corner even while the remesh runs
+    return <WindowCheckPanel check={check} selected={selected} state={state} note={note} modal={modal && state !== 'thanks'} topPx={topPx} leftPx={leftPx} onToggle={toggle} onSend={s => void send(s)} />;
 };

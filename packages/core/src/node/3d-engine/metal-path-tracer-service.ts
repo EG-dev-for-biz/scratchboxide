@@ -59,6 +59,13 @@ export interface MetalPathTraceSunLighting {
         sunAngularDiameterDeg?: number;
         sunIntensity?: number;
     };
+    /**
+     * Haze beyond the sky model's own, as the viewport draws it (common/spatial/height-haze.ts): a grey haze of this
+     * visibility at its base (extinction 3.912 / visibilityMeters) that thins with height above baseAltitudeMeters
+     * (the file's coordinates) by scaleHeightMeters, thinning the sky model's haze with it. Light scattered in is the
+     * horizon sky toward each ray.
+     */
+    haze?: { visibilityMeters?: number; scaleHeightMeters?: number; baseAltitudeMeters?: number };
 }
 
 export interface MetalPathTraceStudioLighting {
@@ -134,6 +141,8 @@ export interface MetalPathTraceStats {
     samplesPerPixel: number;
     maxBounces: number;
     lighting: 'sky' | 'studio';
+    /** The haze the frame was rendered with (all 0 for none). */
+    haze?: { extinctionPerM: number; scaleHeightMeters: number; baseAltitudeMeters: number };
     /** The lights sampled: emissive triangles of the cut, point and spot lights, distant lights, and the tree's nodes. */
     lights: MetalPathTraceLightStats;
     file: { clusters: number; levels: number; vertices: number; leafTriangles: number; atlases: number };

@@ -20,10 +20,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import { GeminiClient } from '../src/node/gemini/gemini-client';
 import {
-    checkImageSkew, cloudChunkConfig, cloudRunTaskCostUsd, createCloudChunkRunner, imageCommit, kdChunkJobPrefix, kdChunkLayerFiles,
+    checkImageSkew, cloudChunkConfig, CloudRunServiceJobs, HybridJobs, kdVmKeys, postChunk, RoundRobinJobs, VmPoolJobs, type ComputeVms, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, parseServiceAnswer, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
     localiseJobPaths, newProgressLines, parseExecution, type CloudExecution, type CloudRunJobs, type KdChunkJobSpec
 } from '../src/node/3d-engine/staged-location/cloud-chunk-runner';
-import { parseKdJobLocation, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
+import { parseKdJobLocation, requestEnv, restoreWorkspace, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
 import { chunkCpuShare, chunkParallel, DISTRICT_CHUNKS_PARAMS, kdChunkRunner, machineCores } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { StagedLocationHardFailure, type StagedLocationOutcome, type StagedLocationRequest } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
@@ -90,6 +90,8 @@ class FakeJobs implements CloudRunJobs {
         return e ? { name, done: true, succeeded: e.ok, ...(e.ok ? {} : { message: 'Task kd-chunk-job-0 failed with exit code 1' }), startMs: e.startMs, endMs: e.endMs } : { name, done: false, succeeded: false };
     }
     async cancel(name: string) { this.cancelled.push(name); }
+    finishedCalls: string[] = [];
+    async finished(name: string) { this.finishedCalls.push(name); }
 }
 
 function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean; env?: NodeJS.ProcessEnv } = {}) {
@@ -175,6 +177,187 @@ describe('pipeline K-D cloud chunk runner', () => {
         const t = setup({ env: { SCRATCHBOX_KD_CHUNK_RUNNER: 'cloud', SCRATCHBOX_KD_CLOUD_PARALLEL: '3', SCRATCHBOX_MODEL_CALLS_PER_MINUTE: '100' } });
         await t.runChunk(request(), {});
         expect(t.jobs.runs[0].SCRATCHBOX_MODEL_CALLS_PER_MINUTE).toBe('25');
+    });
+
+    it('reads the chunk once its outcome is in, while the job still mirrors its caches, and hands the job only the forwarded switches', async () => {
+        const s = setup();
+        // the same chunk, its execution never ending (a job still sending its caches): the outcome is read all the same
+        const jobs = new FakeJobs(`us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`, async env => {
+            const where = parseKdJobLocation(env.KD_JOB);
+            await runKdChunkJob({ bucket: s.bucket, prefix: where.prefix, cache: s.jobCache, build: fakeBuild(s.jobCache), flushMs: 5, log: () => undefined, libraryStatsDir: s.jobStats });
+            return new Promise<boolean>(() => undefined);
+        });
+        const runChunk = createCloudChunkRunner({
+            cache: s.laptop, bucket: s.bucket, jobs, config: { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 }, head: () => SHA, newRunId: () => 'a1b2c3d4',
+            env: { SCRATCHBOX_CACHE_RESTORE: 'off', GOOGLE_MAPS_API_KEY: 'never-sent', SCRATCHBOX_KD_CHUNK_UNIT: 'building' }, log: () => undefined, libraryStatsDir: s.laptopStats
+        });
+        const out = await runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+        expect(jobs.runs).toEqual([{ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' }]);
+        // the backend told the chunk is in (a VM pool suspends its VM then), though the execution itself never ended
+        expect(jobs.finishedCalls).toEqual(['projects/scoutscan/locations/us-central1/jobs/kd-chunk-job/executions/kd-chunk-job-0']);
+        expect(forwardedJobEnv({ SCRATCHBOX_CACHE_MIRROR: ' off ', SCRATCHBOX_CPUS: '8' })).toEqual({ SCRATCHBOX_CACHE_MIRROR: 'off' });
+        expect(KD_CHUNK_BUILT_LINE.test('chunk built (degraded) in 478 s')).toBe(true);
+        expect(KD_CHUNK_BUILT_LINE.test('chunk 3: chunk built (degraded) in 478 s')).toBe(false);
+    });
+
+    it('sends the chunks to the warm worker pool (a Cloud Run service) as it would start job executions, the build the same', async () => {
+        const s = setup();
+        const posted: Array<{ url: string; env: Record<string, string> }> = [];
+        let release!: () => void;
+        const mirrorDone = new Promise<void>(r => { release = r; });
+        const svc = new CloudRunServiceJobs({ ...cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_SERVICE: 'kd-chunk-worker' }), bucket: 'scoutscan-kd-jobs', pollMs: 5 },
+            async <T>() => ({ uri: 'https://kd-chunk-worker-x.a.run.app', template: { containers: [{ image: `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}` }] } }) as T,
+            async (url, body) => {
+                const env = (body as { env: Record<string, string> }).env;
+                posted.push({ url, env });
+                const where = parseKdJobLocation(env.KD_JOB);
+                const ok = await runKdChunkJob({ bucket: s.bucket, prefix: where.prefix, cache: s.jobCache, build: fakeBuild(s.jobCache), flushMs: 5, log: () => undefined, libraryStatsDir: s.jobStats });
+                // the worker answers only after its caches are mirrored; the runner does not wait for that
+                await mirrorDone;
+                return { ok };
+            });
+        expect(svc.label).toBe('run.googleapis.com/projects/scoutscan/locations/us-central1/services/kd-chunk-worker');
+        const runChunk = createCloudChunkRunner({ cache: s.laptop, bucket: s.bucket, jobs: svc, config: { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 }, head: () => SHA, newRunId: () => 'a1b2c3d4', env: { SCRATCHBOX_CACHE_RESTORE: 'off' }, log: () => undefined, libraryStatsDir: s.laptopStats });
+        const out = await runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+        expect(posted).toEqual([{ url: 'https://kd-chunk-worker-x.a.run.app/chunk', env: { KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' } }]);
+        // the execution as the runner reads it: running until the worker answers, then done
+        const name = (await svc.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/8' }));
+        expect(await svc.get(name)).toMatchObject({ done: false, succeeded: false });
+        release();
+        await new Promise(r => setTimeout(r, 50));
+        expect(await svc.get(name)).toMatchObject({ done: true });
+        // the answer: heartbeats, then one JSON line
+        expect(parseServiceAnswer('\n\n{"ok":true,"ms":12}')).toEqual({ ok: true });
+        expect(parseServiceAnswer('\n{"ok":false,"error":"no KD_JOB"}')).toEqual({ ok: false, error: 'no KD_JOB' });
+        expect(parseServiceAnswer('\n\n')).toMatchObject({ ok: false });
+    });
+
+    it('a worker instance builds each chunk from the workspace the image left, and takes only KD_JOB and SCRATCHBOX_ switches', () => {
+        const dir = tmp('scratch');
+        fs.mkdirSync(path.join(dir, 'cache', 'native'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'cache', 'native', 'engine.bin'), 'compiled at image build');
+        const snapshot = new Set(['cache/native/engine.bin'.split('/').join(path.sep)]);
+        fs.mkdirSync(path.join(dir, 'cache', 'staged_location', 'remesh', 'k1'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'cache', 'staged_location', 'remesh', 'k1', 'done.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'cache', 'native', 'other.bin'), 'built by the last chunk');
+        expect(restoreWorkspace(dir, snapshot)).toBe(2);
+        expect(fs.readFileSync(path.join(dir, 'cache', 'native', 'engine.bin'), 'utf8')).toBe('compiled at image build');
+        expect(fs.existsSync(path.join(dir, 'cache', 'staged_location'))).toBe(false);
+        expect(requestEnv({ KD_JOB: 'gs://b/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off', GOOGLE_MAPS_API_KEY: 'x', PATH: '/evil', SCRATCHBOX_N: 3 })).toEqual({ KD_JOB: 'gs://b/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' });
+        expect(() => requestEnv({})).toThrow(/KD_JOB/);
+    });
+
+    it('deals the chunks to the pool in each region in turn, reads each where it went, and refuses regions on different images', async () => {
+        const img = `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`;
+        const a = new FakeJobs(img, async () => true), b = new FakeJobs(img, async () => true);
+        const rr = new RoundRobinJobs([a, b]);
+        expect(await rr.jobImage()).toBe(img);
+        const names = [];
+        for (let k = 0; k < 5; k++) names.push(await rr.run({ KD_JOB: `gs://scoutscan-kd-jobs/kd-jobs/c527da43/${k}` }));
+        expect(a.runs.map(r => r.KD_JOB.split('/').pop())).toEqual(['0', '2', '4']);
+        expect(b.runs.map(r => r.KD_JOB.split('/').pop())).toEqual(['1', '3']);
+        await new Promise(r => setTimeout(r, 20));
+        expect(await rr.get(names[1])).toMatchObject({ done: true, succeeded: true });
+        await rr.cancel(names[3]);
+        expect(b.cancelled).toEqual([names[3]]);
+        await expect(rr.get('nowhere')).rejects.toThrow(/no chunk nowhere/);
+        await expect(new RoundRobinJobs([a, new FakeJobs(img.replace(SHA, 'b'.repeat(40)), async () => true)]).jobImage()).rejects.toThrow(/deploy one image to every region/);
+        expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS: 'us-central1, us-east4,bad region,' }).serviceRegions).toEqual(['us-central1', 'us-east4']);
+        expect(cloudChunkConfig({}).serviceRegions).toBeUndefined();
+    });
+
+    it('builds the largest chunks on the suspended VMs, resuming one for each and suspending it after, the rest on the pool', async () => {
+        const img = `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`;
+        const bucketDir = tmp('vm-bucket'), bucket = new DirectoryCloudBucket(bucketDir);
+        const status = new Map([['kd-fast-1', 'SUSPENDED'], ['kd-fast-2', 'SUSPENDED']]);
+        const calls: string[] = [];
+        const compute: ComputeVms = {
+            status: async vm => status.get(vm)!,
+            resume: async vm => { calls.push(`resume ${vm}`); status.set(vm, 'RUNNING'); },
+            suspend: async vm => { calls.push(`suspend ${vm}`); status.set(vm, 'SUSPENDED'); },
+            image: async () => img
+        };
+        const vms = new VmPoolJobs(['kd-fast-1', 'kd-fast-2'], compute, bucket, tmp('vm-work'), () => undefined, Date.now, 1);
+        const pool = new FakeJobs(img, async () => true);
+        const jobs = new HybridJobs(vms, pool);
+        expect(await jobs.jobImage()).toBe(img);
+        // the VM's side (kd-chunk-job.ts --poll): it takes its assignment and answers for that chunk
+        const vmAnswers = async (vm: string, ok = true) => {
+            const keys = kdVmKeys(vm), f = path.join(tmp('vm-side'), 'a.json');
+            expect(await bucket.download(keys.assign, f)).toBe(true);
+            const job = JSON.parse(fs.readFileSync(f, 'utf8')).env.KD_JOB as string;
+            await bucket.remove(keys.assign);
+            fs.writeFileSync(f, JSON.stringify({ ok, ms: 1, job }));
+            await bucket.putFile(keys.done, f);
+            return job;
+        };
+        const a = await jobs.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/25', KD_FAST: '1' });
+        const b = await jobs.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/26', KD_FAST: '1' });
+        // a third marked chunk, no VM free: the pool; an unmarked one: the pool, with the mark never passed on
+        const c = await jobs.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/28', KD_FAST: '1' });
+        await jobs.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/3' });
+        expect([a, b].every(n => n.startsWith('vm/'))).toBe(true);
+        expect(pool.runs).toEqual([{ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/28' }, { KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/3' }]);
+        expect(c.includes('kd-chunk-job-')).toBe(true);
+        expect(calls).toEqual(['resume kd-fast-1', 'resume kd-fast-2']);
+        // running until the VM answers; then done, and the VM suspended again and free
+        expect(await jobs.get(a)).toMatchObject({ done: false });
+        expect(await vmAnswers('kd-fast-1')).toBe('gs://scoutscan-kd-jobs/kd-jobs/c527da43/25');
+        expect(await jobs.get(a)).toMatchObject({ done: true, succeeded: true });
+        await new Promise(r => setTimeout(r, 5));
+        expect(calls).toContain('suspend kd-fast-1');
+        expect(vms.free()).toBe(1);
+        // an answer for another chunk is not this one's; a failed build fails the chunk
+        await vmAnswers('kd-fast-2', false);
+        expect(await jobs.get(b)).toMatchObject({ done: true, succeeded: false, message: expect.stringMatching(/outcome/) });
+        // a VM still suspending is waited for, then resumed
+        status.set('kd-fast-1', 'SUSPENDING');
+        setTimeout(() => status.set('kd-fast-1', 'SUSPENDED'), 20);
+        const d = await vms.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/31' });
+        expect(d.startsWith('vm/kd-fast-1/')).toBe(true);
+        expect(status.get('kd-fast-1')).toBe('RUNNING');
+        // a VM found suspended with its chunk unfinished (a late suspend) is resumed, the chunk still running
+        status.set('kd-fast-1', 'SUSPENDED');
+        calls.length = 0;
+        expect(await vms.get(d)).toMatchObject({ done: false });
+        expect(calls).toEqual(['resume kd-fast-1']);
+        // the runner read the chunk's outcome ("chunk built"): the VM suspended by the runner then, once, with no done.json
+        // (the worker no longer suspends itself), the chunk done and the VM free
+        calls.length = 0;
+        await jobs.finished?.(d);
+        await vms.finished(d);
+        expect(calls).toEqual(['suspend kd-fast-1']);
+        expect(await vms.get(d)).toMatchObject({ done: true, succeeded: true });
+        expect(calls).toEqual(['suspend kd-fast-1']);
+        expect(vms.free()).toBe(2);
+        // VMs created from different images are refused; the config
+        const mixed = new VmPoolJobs(['x', 'y'], { ...compute, image: async vm => (vm === 'x' ? img : img.replace(SHA, 'c'.repeat(40))) }, bucket, tmp('vm-work2'));
+        await expect(mixed.jobImage()).rejects.toThrow(/one image/);
+        expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_VMS: 'kd-fast-1,kd-fast-2, Bad_Name' })).toMatchObject({ vms: ['kd-fast-1', 'kd-fast-2'], vmZone: 'us-central1-a' });
+        expect(() => kdVmKeys('../x')).toThrow();
+        // a VM in another zone: name@zone; its keys are the name's
+        expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_VMS: 'kd-fast-1@us-central1-b,kd-fast-2' }).vms).toEqual(['kd-fast-1@us-central1-b', 'kd-fast-2']);
+        expect(kdVmKeys('kd-fast-1@us-central1-b')).toEqual({ assign: 'kd-vm/kd-fast-1/assign.json', done: 'kd-vm/kd-fast-1/done.json' });
+    });
+
+    it('sends a chunk to the pool again while it scales (503, 429, a dropped connection), never failing it for that', async () => {
+        const answers: Array<() => { ok: boolean; status: number; text(): Promise<string> }> = [
+            () => { throw new Error('socket hang up'); },
+            () => ({ ok: false, status: 503, text: async () => 'no instance' }),
+            () => ({ ok: false, status: 429, text: async () => 'busy' }),
+            () => ({ ok: true, status: 200, text: async () => '\n{"ok":true,"ms":5}' })
+        ];
+        const waits: number[] = [];
+        let k = 0;
+        expect(await postChunk(async () => answers[k++](), new AbortController().signal, async ms => { waits.push(ms); })).toEqual({ ok: true });
+        expect(waits).toEqual([2000, 4000, 8000]);
+        // a real refusal is the chunk's answer at once; a pool that never comes is a failure after the last try
+        expect(await postChunk(async () => ({ ok: false, status: 400, text: async () => 'no KD_JOB' }), new AbortController().signal, async () => undefined)).toEqual({ ok: false, error: 'the worker answered 400: no KD_JOB' });
+        expect(await postChunk(async () => ({ ok: false, status: 503, text: async () => 'none' }), new AbortController().signal, async () => undefined)).toMatchObject({ ok: false, error: expect.stringMatching(/503/) });
     });
 
     it('sets no budget on an execution when this process has none', async () => {

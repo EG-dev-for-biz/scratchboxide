@@ -1415,26 +1415,94 @@ type FitEntry = Extract<WindowFitFile['facades'][number], { rects: WindowRect[] 
  * Every facade of window_fit.json brought onto its array (the file rewritten in place). An entry already carrying this
  * version is left; one carrying another is restored to its pre-array boxes and inferred again.
  */
-export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: WindowArrayParams = WINDOW_ARRAY_PARAMS, opts: { /** The building's roof line (world Y): the array steps into an unreached band at a photo's top edge only below it. */ envelopeTopY?: number; /** The building's system as the vision model read it from the whole structure (building-system.ts): laid on every face in one of its families, kept where the photo shows it. */ system?: BuildingSystem } = {}): WindowArrayReport {
+/** A facade's frame in facades.json, as the array reads it. */
+export type ArrayFrame = { facadeId: number; image: string; width: number; height: number; pixel: number; uncoveredMask?: string; occludedMask?: string; centroid?: number[]; axisT?: number[]; orthoTMax?: number };
+
+type ArrayOpts = { /** The building's roof line (world Y): the array steps into an unreached band at a photo's top edge only below it. */ envelopeTopY?: number; /** The building's system as the vision model read it from the whole structure (building-system.ts): laid on every face in one of its families, kept where the photo shows it. */ system?: BuildingSystem };
+
+/** One facade's first pass (its own array, no building storey), as a job on another thread runs it (remesh-worker.ts windowArrayFacade). */
+export interface ArrayFacadeJob { orthosDir: string; frame: ArrayFrame; input: ArrayInput; regions: FaceRegion[]; minRowPx?: number; params: WindowArrayParams }
+
+/** What a facade's array is asked to keep (the input) and the system's regions on it: the same for the main thread and a job. */
+function arrayInputOf(e: FitEntry, system: BuildingSystem | undefined, f: ArrayFrame, storey?: Lattice1D): { input: ArrayInput; regions: FaceRegion[] } {
+    // the reader's boxes: the merged rects the window fit's own reading (structural) does not hold
+    const st = (e as FitEntry & { reader?: string; structural?: { rects: WindowRect[] } }).structural, own = new Set((st?.rects ?? []).map(r => r.join(',')));
+    const fixed = (e as { reader?: string }).reader && st ? e.rects.filter(r => !own.has(r.join(','))) : [];
+    const input: ArrayInput = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}), ...(fixed.length ? { fixed } : {}) };
+    // a face the building's system covers is run region by region; any other face reads for itself
+    return { input, regions: system && !storey ? systemOnFace(system, f) : [] };
+}
+
+/** A facade's array from its photo: by the system's regions when it covers the face, else read for itself (with the building's storey on the second pass). */
+function arrayOutOf(photo: NonNullable<ReturnType<typeof facadePhotoFor>>, f: ArrayFrame, input: ArrayInput, regions: FaceRegion[], P: WindowArrayParams, minRowPx: number | undefined, storey?: Lattice1D): ArrayOutput {
+    return regions.length ? inferRegions(input, photo, f.pixel, regions, P, minRowPx) : inferWindowArray(input, photo.img, photo.valid, photo.occluded, f.pixel, P, { ...(photo.featureless ? { featureless: photo.featureless } : {}), ...(minRowPx !== undefined ? { minRowPx } : {}), ...(storey ? { storey } : {}) });
+}
+
+/** A facade's first pass on its own (a job on another thread): undefined when its photo cannot be read. */
+export function arrayFacadeFirstPass(job: ArrayFacadeJob): ArrayOutput | undefined {
+    const photo = facadePhotoFor(job.orthosDir, job.frame);
+    return photo ? arrayOutOf(photo, job.frame, job.input, job.regions, job.params, job.minRowPx) : undefined;
+}
+
+/** The roof line in a facade's photo (pixels from its top): world Y = centroid.y + t axisT.y, t = orthoTMax - y pixel (the plane frame). */
+function roofLinePx(f: ArrayFrame, envelopeTopY: number | undefined): number | undefined {
+    if (envelopeTopY === undefined || !f.centroid || !f.axisT || f.orthoTMax === undefined || Math.abs(f.axisT[1]) <= 1e-6) return undefined;
+    const tTop = (envelopeTopY - f.centroid[1]) / f.axisT[1];
+    return Math.max(0, (f.orthoTMax - tTop) / f.pixel);
+}
+
+/**
+ * inferWindowArrays with each facade's first pass on other threads (`runJobs`, in the facades' order, results by index):
+ * the same report and the same fit, byte for byte, as the passes run here one after another; the building's storeys and
+ * the second pass stay on this thread. (The window array was 12-24 s on the main thread for Penn's largest buildings.)
+ */
+export async function inferWindowArraysOnThreads(orthosDir: string, fit: WindowFitFile, runJobs: (jobs: ArrayFacadeJob[]) => Promise<Array<ArrayOutput | undefined>>, P: WindowArrayParams = WINDOW_ARRAY_PARAMS, opts: ArrayOpts = {}): Promise<WindowArrayReport> {
+    const frames = readArrayFrames(orthosDir);
+    const ids: number[] = [], jobs: ArrayFacadeJob[] = [];
+    for (const entry of fit.facades) {
+        if ('error' in entry) continue;
+        const e = entry as FitEntry;
+        if (e.array?.version === WINDOW_ARRAY_VERSION) continue;
+        const f = frames.find(x => x.facadeId === e.facadeId);
+        if (!f || f.width !== e.width || f.height !== e.height) continue;
+        // the input as the first pass builds it, from the entry as the window fit left it (inferWindowArrays restores it too)
+        restoreEntry(e);
+        const minRowPx = roofLinePx(f, opts.envelopeTopY);
+        ids.push(e.facadeId);
+        jobs.push({ orthosDir, frame: f, ...arrayInputOf(e, opts.system, f), ...(minRowPx !== undefined ? { minRowPx } : {}), params: P });
+    }
+    const outs = jobs.length ? await runJobs(jobs) : [];
+    return inferWindowArrays(orthosDir, fit, P, opts, new Map(ids.map((id, k) => [id, outs[k] ?? null])));
+}
+
+/** A fit entry back as the window fit left it (an array from an earlier version taken off). */
+function restoreEntry(e: FitEntry): void {
+    if (!e.array) return;
+    e.rects = e.array.in.rects;
+    if (e.array.in.panes) e.panes = e.array.in.panes; else delete e.panes;
+    if (e.array.in.generated) e.generated = e.array.in.generated; else delete e.generated;
+    delete e.array;
+}
+
+function readArrayFrames(orthosDir: string): ArrayFrame[] {
+    return JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ArrayFrame[];
+}
+
+export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: WindowArrayParams = WINDOW_ARRAY_PARAMS, opts: ArrayOpts = {}, /** First passes already run elsewhere (inferWindowArraysOnThreads), by facade; null where its photo could not be read. */ firstPasses?: Map<number, ArrayOutput | null>): WindowArrayReport {
     const t0 = Date.now();
-    const frames = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as Array<{ facadeId: number; image: string; width: number; height: number; pixel: number; uncoveredMask?: string; occludedMask?: string; centroid?: number[]; axisT?: number[]; orthoTMax?: number }>);
+    const frames = readArrayFrames(orthosDir);
     const facades: FacadeArrayReport[] = [];
     // each facade on its own first; then the building's storeys from the facades that hold rows, and a second pass over
     // the facades that lacked rows of their own (left as fitted, or holding fewer than P.photo.minRows), with the
     // building's storeys (user direction, 2026-11-07: the whole structure's context infers a face's placements)
-    type Pending = { e: FitEntry; f: (typeof frames)[number]; photo: NonNullable<ReturnType<typeof facadePhotoFor>>; minRowPx?: number };
+    type Pending = { e: FitEntry; f: ArrayFrame; photo: () => NonNullable<ReturnType<typeof facadePhotoFor>> | undefined; minRowPx?: number };
     const pending = new Map<number, Pending>();
-    const restore = (e: FitEntry) => { if (!e.array) return; e.rects = e.array.in.rects; if (e.array.in.panes) e.panes = e.array.in.panes; else delete e.panes; if (e.array.in.generated) e.generated = e.array.in.generated; else delete e.generated; delete e.array; };
-    const run = (p: Pending, storey?: Lattice1D) => {
-        const { e, f, photo, minRowPx } = p;
+    const restore = restoreEntry;
+    const run = (p: Pending, storey?: Lattice1D, pre?: ArrayOutput) => {
+        const { e, f, minRowPx } = p;
         restore(e);
-        // the reader's boxes: the merged rects the window fit's own reading (structural) does not hold
-        const st = (e as FitEntry & { reader?: string; structural?: { rects: WindowRect[] } }).structural, own = new Set((st?.rects ?? []).map(r => r.join(',')));
-        const fixed = (e as { reader?: string }).reader && st ? e.rects.filter(r => !own.has(r.join(','))) : [];
-        const input: ArrayInput = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}), ...(fixed.length ? { fixed } : {}) };
-        // a face the building's system covers is run region by region; any other face reads for itself
-        const regions = opts.system && !storey ? systemOnFace(opts.system, f) : [];
-        const out = regions.length ? inferRegions(input, photo, f.pixel, regions, P, minRowPx) : inferWindowArray(input, photo.img, photo.valid, photo.occluded, f.pixel, P, { ...(photo.featureless ? { featureless: photo.featureless } : {}), ...(minRowPx !== undefined ? { minRowPx } : {}), ...(storey ? { storey } : {}) });
+        const { input, regions } = arrayInputOf(e, opts.system, f, storey);
+        const out = pre ?? arrayOutOf(p.photo()!, f, input, regions, P, minRowPx, storey);
         const at = facades.findIndex(x => x.facadeId === e.facadeId), rep = { facadeId: e.facadeId, ...out.report };
         if (at >= 0) facades[at] = rep; else facades.push(rep);
         if (out.report.reason) return;
@@ -1447,17 +1515,14 @@ export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: Wind
         if (e.array?.version === WINDOW_ARRAY_VERSION) { facades.push({ facadeId: e.facadeId, ...e.array.report }); continue; }
         restore(e);
         const f = frames.find(x => x.facadeId === e.facadeId);
-        const photo = f && f.width === e.width && f.height === e.height ? facadePhotoFor(orthosDir, f) : undefined;
-        if (!f || !photo) { facades.push({ facadeId: e.facadeId, boxesIn: e.rects.length, spans: 0, on: 0, snapped: 0, replaced: 0, added: 0, rejected: 0, reason: 'no photo of the entry\'s size' }); continue; }
-        // the roof line in the photo: world Y = centroid.y + t axisT.y, t = orthoTMax - y pixel (the plane frame)
-        let minRowPx: number | undefined;
-        if (opts.envelopeTopY !== undefined && f.centroid && f.axisT && f.orthoTMax !== undefined && Math.abs(f.axisT[1]) > 1e-6) {
-            const tTop = (opts.envelopeTopY - f.centroid[1]) / f.axisT[1];
-            minRowPx = Math.max(0, (f.orthoTMax - tTop) / f.pixel);
-        }
-        const p: Pending = { e, f, photo, ...(minRowPx !== undefined ? { minRowPx } : {}) };
+        // the photo is read here unless the first pass ran elsewhere; then only if the second pass needs it
+        const pre = f && firstPasses?.has(e.facadeId) ? firstPasses.get(e.facadeId) : undefined;
+        let photo: ReturnType<typeof facadePhotoFor> | null | undefined = pre === undefined && f && f.width === e.width && f.height === e.height ? facadePhotoFor(orthosDir, f) : undefined;
+        if (!f || (pre === undefined ? !photo : pre === null)) { facades.push({ facadeId: e.facadeId, boxesIn: e.rects.length, spans: 0, on: 0, snapped: 0, replaced: 0, added: 0, rejected: 0, reason: 'no photo of the entry\'s size' }); continue; }
+        const minRowPx = roofLinePx(f, opts.envelopeTopY);
+        const p: Pending = { e, f, photo: () => (photo ??= facadePhotoFor(orthosDir, f)) ?? undefined, ...(minRowPx !== undefined ? { minRowPx } : {}) };
         pending.set(e.facadeId, p);
-        run(p);
+        run(p, undefined, pre ?? undefined);
     }
     // the building's storeys from every facade's own rows: those inferred now, and those already arrayed (a facade taken
     // from the first pass when the ownership vote left it unchanged, pipeline-k/facade-reuse.ts) unless the building's
@@ -1486,7 +1551,7 @@ export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: Wind
         // a face the building's system read (arrayed or not: no array is an answer) is not given the storeys
         if (r.system?.regions || r.source === 'system' || !(r.reason || (r.rowsIn ?? 0) < P.photo.minRows || offStorey(r))) continue;
         const storey = storeyOnFacade(building, p.f);
-        if (storey) run(p, storey);
+        if (storey && p.photo()) run(p, storey);
     }
     (fit as WindowFitFile & { array?: string }).array = WINDOW_ARRAY_VERSION;
     fs.writeFileSync(path.join(orthosDir, WINDOW_FIT_FILE), JSON.stringify(fit));

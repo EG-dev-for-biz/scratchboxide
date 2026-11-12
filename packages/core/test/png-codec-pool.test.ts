@@ -17,7 +17,9 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodePng } from '../src/node/texture-processing';
-import { closePngCodecPool, decodePngAsync, encodePngAsync, INLINE_MAX_BYTES } from '../src/node/png-codec-pool';
+import { closePngCodecPool, decodePngAsync, delightImageAsync, encodePngAsync, INLINE_MAX_BYTES } from '../src/node/png-codec-pool';
+import { delightImage } from '../src/node/3d-engine/staged-location/pipeline-k/twin-delight';
+import { TEXEL_ROOF } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
 
 /** A facade-like image: storey bands and window columns, a smooth light gradient and seeded noise. */
 function facade(width: number, height: number, channels: 1 | 3 | 4, seed = 7): Uint8Array {
@@ -102,5 +104,24 @@ describe('PNG codec pool', () => {
         console.log(`[png-codec-pool] 8 x 1200x2400 RGBA encode+decode: sync ${syncMs.toFixed(0)} ms, longest event-loop stall ${syncLag.toFixed(0)} ms; pool ${poolMs.toFixed(0)} ms, longest stall ${poolLag.toFixed(0)} ms`);
         expect(syncLag).toBeGreaterThan(500);
         expect(poolLag).toBeLessThan(syncLag / 5);
+    });
+    it('de-lights a photo on a codec thread to the same pixels as on this one, with the roof and upward masks', async () => {
+        const width = 300, height = 200, n = width * height;
+        let seed = 7;
+        const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32;
+        const rgba = new Uint8Array(n * 4);
+        for (let k = 0; k < rgba.length; k++) rgba[k] = Math.floor(rnd() * 256);
+        const surface = new Uint8Array(n), up = new Uint8Array(n);
+        for (let k = 0; k < n; k++) { if (rnd() < 0.3) surface[k] = TEXEL_ROOF; if (rnd() < 0.2) up[k] = TEXEL_ROOF; }
+        expect(rgba.byteLength).toBeGreaterThan(INLINE_MAX_BYTES);
+        const img = { width, height, rgba };
+        for (const args of [[undefined, undefined], [surface, undefined], [surface, { mask: up, shadowLift: 0.2 }]] as const) {
+            const here = delightImage(img, args[0], args[1] as never);
+            const there = await delightImageAsync(img, args[0], args[1] as never);
+            expect(there.width).toBe(width);
+            expect(Buffer.from(there.rgba).equals(Buffer.from(here.rgba))).toBe(true);
+        }
+        // the caller's photo is untouched
+        expect(img.rgba).toBe(rgba);
     });
 });
