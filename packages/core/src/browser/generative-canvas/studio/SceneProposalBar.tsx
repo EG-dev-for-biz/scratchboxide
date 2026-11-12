@@ -54,12 +54,12 @@ export const SceneProposalBar: React.FC<SceneProposalBarProps> = ({ proposal, on
             color: 'var(--sb-foreground)'
         }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ ...BUTTON, border: 'none', padding: '0 4px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', flex: '1 1 auto', textAlign: 'left' }}>
+                <button type="button" className="sb-btn sb-btn-xs sb-scene-proposal-toggle" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ ...BUTTON, border: 'none', padding: '0 4px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', flex: '1 1 auto', textAlign: 'left' }}>
                     {open ? '▾' : '▸'} {summary}: {proposal.label}
                     {conflicts > 0 && <span style={{ color: 'var(--sb-text-secondary)' }}> · {conflicts} you also changed (yours kept)</span>}
                 </button>
-                <button type="button" onClick={onReject} style={BUTTON}>{held ? 'Reject all' : 'Undo all'}</button>
-                <button type="button" onClick={onAccept} style={{ ...BUTTON, background: 'var(--sb-system-blue, #2563eb)', borderColor: 'transparent', color: '#fff' }}>{held ? 'Accept all' : 'Keep'}</button>
+                <button type="button" className="sb-btn sb-btn-xs sb-scene-proposal-reject" onClick={onReject} style={BUTTON}>{held ? 'Reject all' : 'Undo all'}</button>
+                <button type="button" className="sb-btn sb-btn-xs sb-scene-proposal-accept" onClick={onAccept} style={{ ...BUTTON, background: 'var(--sb-system-blue, #2563eb)', borderColor: 'transparent', color: '#fff' }}>{held ? 'Accept all' : 'Keep'}</button>
             </div>
             {open && (
                 <ul style={{ listStyle: 'none', margin: '6px 0 2px', padding: 0, maxHeight: 160, overflowY: 'auto' }}>
