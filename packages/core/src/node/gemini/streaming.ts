@@ -1444,7 +1444,11 @@ export class StreamingEngine {
         if (blocked) {
             return failedToolResult(toolName, blocked, 'scratchbox-permissions');
         }
-        const ctx: ToolContext = { ...this.toolContext(request), ...extras };
+        // Tools that make their own Google calls (vision checks, image models) read ctx.request.model as the model to
+        // ask. On a Claude or OpenAI chat that id means nothing to Google (Vertex answered "Publisher model ...
+        // claude-opus-5-5 was not found"), so those tools get the request without it and use their own defaults.
+        const toolRequest = providerForChatModel(request.model || this.client.preferredModel) === 'gemini' ? request : { ...request, model: undefined };
+        const ctx: ToolContext = { ...this.toolContext(toolRequest), ...extras };
         // A tool attached from an MCP server is never connected here, whatever its name looks like (a `generate_` or
         // `build_` prefix would otherwise read as an unknown workspace tool); a registered tool of that name still runs.
         const attachedMcp = (request.attachedMcpTools || []).some(t => t.name === toolName || t.name.replace(/[^a-zA-Z0-9_-]/g, '_') === toolName);

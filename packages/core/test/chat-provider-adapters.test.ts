@@ -386,6 +386,20 @@ describe('the chat agent loop on Claude and OpenAI', () => {
         expect(JSON.parse(output.output)).toMatchObject({ status: 'task_list_updated' });
     });
 
+    it("does not hand the chat's Claude model id to tools, whose own Google calls would ask Vertex for it", async () => {
+        const service = serviceWith(cannedFetch([
+            { body: claudeStream([{ type: 'tool_use', id: 'toolu_m', name: 'update_task_list', input: tasks }], 'tool_use', {}, 'claude-opus-5-5') },
+            { body: claudeStream([{ type: 'text', text: 'Done.' }], 'end_turn', {}, 'claude-opus-5-5') }
+        ], []), { anthropic: 'sk-ant-test' });
+        const registry = (service as any).streaming.registry;
+        const dispatch = registry.dispatch.bind(registry);
+        const seen: Array<string | undefined> = [];
+        registry.dispatch = (name: string, args: unknown, ctx: any) => { seen.push(ctx.request.model); return dispatch(name, args, ctx); };
+        await service.streamGenerate({ prompt: 'plan', model: 'claude-opus-5-5', mode: 'agent', subagentModel: 'gemini-3.5-flash-lite' }, () => undefined);
+        // the tool's context carries no chat model
+        expect(seen).toEqual([undefined]);
+    });
+
     it("says so when Claude's server-side fallback answered instead of the chat's model", async () => {
         const service = serviceWith(cannedFetch([{ body: claudeStream([{ type: 'text', text: 'Answered.' }], 'end_turn', {}, 'claude-sonnet-5') }], []), { anthropic: 'sk-ant-test' });
         const events: GeminiStreamEvent[] = [];
