@@ -136,6 +136,8 @@ export interface SendMessageDeps {
     persistSessionsImmediately: (updatedSessions: ChatSession[]) => void;
     aiInteractionMode?: 'agent' | 'ask' | 'plan';
     openSettingsToTab?: (tab: StudioSettingsTab) => void;
+    /** The model this chat runs on (the composer's picker); empty for Settings' default. */
+    chatModel?: string;
 }
 
 /**
@@ -565,8 +567,8 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
 
         const requiresWebSearch = !!d.attachedContextMentions?.some(m => m.type === 'web');
 
-        // Model and thinking budget come from Settings > Models & AI; when nothing is saved the
-        // backend's own defaults apply.
+        // The model is the chat's own (the composer's picker), else Settings > Models & AI's; the thinking budget comes
+        // from Settings. When nothing is set the backend's own defaults apply.
         const { settings: savedSettings } = await WorkspaceConfigClient.getInstance().fetchWorkspaceConfig(d.activeWorkspace?.path);
         await GeminiClient.getInstance().streamGenerate(
             {
@@ -574,7 +576,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 images: d.attachedImages && d.attachedImages.length > 0
                     ? d.attachedImages.map(img => ({ mimeType: img.mimeType, data: img.data, name: img.name }))
                     : undefined,
-                model: savedSettings?.defaultModel || undefined,
+                model: d.chatModel || savedSettings?.defaultModel || undefined,
                 thinkingBudget: savedSettings?.thinkingBudget,
                 // @web requires a Google Search for this turn, whatever the grounding setting.
                 enableGoogleSearch: requiresWebSearch || googleSearchGrounding !== false,
@@ -917,6 +919,8 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
             activeArtifact: canvas.activeArtifact,
             artifactHistory: canvas.artifactHistory,
             layoutMode: canvas.layoutMode,
+            // The model the chat was answered on stays its model.
+            ...((d.chatModel || existingSession?.chatModel) ? { chatModel: d.chatModel || existingSession?.chatModel } : {}),
             ...(sceneProposals?.length ? { sceneProposals } : {})
         };
         const updated = exists ? prev.map(s => s.id === targetSessionId ? sessionData : s) : [sessionData, ...prev];

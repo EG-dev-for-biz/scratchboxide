@@ -50,15 +50,20 @@ async function runCursorExperienceAndGoogleModelsTests() {
     // -------------------------------------------------------------
     assert.ok(serviceSource.includes("DEFAULT_GEMINI_MODEL = 'gemini-4-argon'"), 'Primary model must be Google gemini-4-argon');
     assert.ok(serviceSource.includes("DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite'"), 'Subagent model must be Google gemini-3.5-flash-lite');
-    assert.ok(!serviceSource.includes('claude-') && !serviceSource.includes('gpt-4'), 'Backend must not reference non-Google models');
-    console.log('  ✓ Test 1 Passed: Backend strictly configured with Google Models (Gemini 3.8 Flash & Subagents)');
+    // Since 2026-11-12 (user decision) the chat agent may also run on Claude or OpenAI models, picked per chat
+    // (common/chat-models.ts, node/chat-agent/). Google stays the default: the first and default option, and the server's
+    // fallback for any model id it does not recognise.
+    const chatModelsSource = fs.readFileSync(path.resolve(__dirname, '../src/common/chat-models.ts'), 'utf-8');
+    assert.ok(/CHAT_MODEL_OPTIONS[^=]*=\s*\[\s*\{\s*id:\s*'gemini-4-argon'/.test(chatModelsSource), 'The chat model picker must list Google gemini-4-argon first');
+    assert.ok(chatModelsSource.includes("Gemini for anything else (the server default)"), 'An unrecognised chat model id must fall back to Gemini');
+    console.log('  ✓ Test 1 Passed: Google models are the default; other chat providers are opt-in per chat');
 
     // -------------------------------------------------------------
     // Test 2: UI does not expose raw model slugs to user (Model Privacy)
     // -------------------------------------------------------------
     // Settings modal and components should show friendly tier labels like "High Reasoning Engine", "Fast Assistant", etc.
-    assert.ok(settingsSource.includes('High Reasoning Engine'), 'SettingsModal must present capability tier "High Reasoning Engine"');
-    assert.ok(settingsSource.includes('Fast Intelligence'), 'SettingsModal must present capability tier "Fast Intelligence"');
+    // The chat's model is chosen per chat in the composer (named by provider and model); Settings holds the provider keys.
+    assert.ok(settingsSource.includes('CHAT_PROVIDER_LABEL'), 'Settings must name chat providers by their labels');
     assert.ok(!settingsSource.includes('Active Model: gemini-'), 'SettingsModal must not leak raw model slug string in status display');
     assert.ok(!spotlightSource.includes('Gemini 3.8 reasoning'), 'SpotlightLauncherModal must use generic AI naming in user search');
     assert.ok(automationsSource.includes('Autonomous AI Agent'), 'AutomationsModal must describe AI node as Autonomous AI Agent');

@@ -87,6 +87,7 @@ import {
     synthesizeTerminalDebugPrompt
 } from './terminal-debug-bridge';
 import { GeminiClient, AudioPlayer } from './gemini-client';
+import { useChatModel } from './hooks/useChatModel';
 import { WorkspaceConfigClient } from './workspace-config-client';
 import {
     IconAutomations,
@@ -573,6 +574,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
     const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path);
+    // The model this chat's agent runs on (Gemini, Claude or OpenAI), kept on the chat.
+    const { chatModel, setChatModel, chatModels, defaultChatModel } = useChatModel(sessions, currentSessionId, setSessions, persistSessionsImmediately);
 
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
@@ -1199,6 +1202,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setGraphEpoch,
         activeWorkspace,
         persistSessionsImmediately,
+        chatModel,
         aiInteractionMode,
         openSettingsToTab
     });
@@ -1322,7 +1326,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         queuedMessages,
         removeQueuedMessage,
         stopGenerating: handleStopGenerating,
-        canStop: streamInFlight
+        canStop: streamInFlight,
+        chatModel,
+        setChatModel,
+        chatModels,
+        defaultChatModel
     };
 
     const messageListProps = {
