@@ -188,6 +188,7 @@ Status: built through the app's chat (v8, world cache off, fresh folder), once t
 - **The second removal pass ran:** 18 of 24 kept level views were edited twice. After it the vision model still counts 0 in 12 views and 1-3 in the other 12.
 - v8: 9,279,865 predicted, 763,540 outside their cell, 0 thinned, 8,461,138 street splats, 10,514,761 in the world.
 - **Reading** (against v7, the scan reference, same cameras; an independent visual check): v7 reads slightly cleaner in three of four cameras. v8 shows a floating mast fragment beside the signal (A), a blown-out slab where v7 shows a brick facade (B) and a torn hole in the road (D); in C it adds sidewalk planters and trees and is roughly even. Crosswalks are equally sharp. Depth Anything 3 as the reference is therefore not an improvement here.
+- **Decision (user, 2026-11-12):** the scan is the default reference; `SCRATCHBOX_STREET_SHARP_DEPTH=photo` turns Depth Anything 3 on.
 - **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_da3_reference.png`.
 
 ## Still open

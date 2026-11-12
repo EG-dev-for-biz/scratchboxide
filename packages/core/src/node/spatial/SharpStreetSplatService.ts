@@ -12,13 +12,13 @@
  * (SHARP, tools/depth/sharp_street_worker.py) and scaled onto the scan.
  *
  * Per panorama: four level views a quarter turn apart and one looking straight down, each at its registered camera. SHARP
- * predicts one Gaussian per pixel at its own scale. A level view's reference is the photo's own depth (Depth Anything 3
- * over the panorama's four level views, Da3RigDepthService), brought to metres by one number: the scan's depth where it
- * agrees with the photo's (so a parked car or a tree the scan smeared does not pull the fit), else the eye's height over
- * the ground. One smooth scale-against-depth curve per view then moves SHARP's splats onto that reference, and only the
- * splats within 30 m of the panorama's own eye are kept: beyond that the world's base layer stands. Without Depth
- * Anything 3 (SCRATCHBOX_STREET_SHARP_DEPTH=scan, or its interpreter missing) the scan itself is the reference, fitted
- * only where it agrees with the view's ground, and the report says so.
+ * predicts one Gaussian per pixel at its own scale. A level view's reference is the scan's depth at the view's camera,
+ * read only where it agrees with the view's ground (user decision, 2026-11-12: at 7th Ave the scan reference read cleaner
+ * than Depth Anything 3's). With SCRATCHBOX_STREET_SHARP_DEPTH=photo it is the photo's own depth (Depth Anything 3 over the
+ * panorama's four level views, Da3RigDepthService), brought to metres by one number: the scan's depth where it agrees with
+ * the photo's, else the eye's height over the ground; where Depth Anything 3 cannot run the scan stands and the report says
+ * why. One smooth scale-against-depth curve per view then moves SHARP's splats onto the reference, and only the splats
+ * within 30 m of the panorama's own eye are kept: beyond that the world's base layer stands.
  *
  * Each view is drawn from the panorama's own full-resolution tiles where they can be read (Map Tiles API, 1536 px a view
  * in place of the Static API's 640; SCRATCHBOX_STREET_SHARP_TILES=0 off), and only where the tile view matches the Static
@@ -284,8 +284,8 @@ export interface SharpStreetRequest {
     pythonExecutable?: string;
     checkpoint?: string;
     /**
-     * The photo's own depth for a panorama's level views (default: Depth Anything 3, unless
-     * SCRATCHBOX_STREET_SHARP_DEPTH=scan). `false` uses the scan as the reference.
+     * The photo's own depth for a panorama's level views. Default: the scan is the reference, unless
+     * SCRATCHBOX_STREET_SHARP_DEPTH=photo (Depth Anything 3). `false` always uses the scan.
      */
     photoDepth?: false | ((images: RigViewImage[]) => Promise<RigDepthView[]>);
 }
@@ -294,7 +294,7 @@ export interface SharpStreetRequest {
 function photoDepthEstimator(req: SharpStreetRequest, env: NodeJS.ProcessEnv = process.env): { estimate: (images: RigViewImage[]) => Promise<RigDepthView[]> } | { reason: string } {
     if (req.photoDepth === false) return { reason: 'the request asked for the scan' };
     if (req.photoDepth) return { estimate: req.photoDepth };
-    if (env.SCRATCHBOX_STREET_SHARP_DEPTH === 'scan') return { reason: 'SCRATCHBOX_STREET_SHARP_DEPTH=scan' };
+    if (env.SCRATCHBOX_STREET_SHARP_DEPTH !== 'photo') return { reason: 'the scan is the default reference (SCRATCHBOX_STREET_SHARP_DEPTH=photo uses Depth Anything 3)' };
     const service = new Da3RigDepthService();
     return { estimate: async images => (await service.estimate(images, { stride: 1, timeoutMs: 300_000 })).views };
 }
