@@ -12,6 +12,7 @@ import { RelatedArtifactsRail } from '../RelatedArtifactsRail';
 import { ArtifactStageProps } from './artifact-stage-props';
 import { CanvasCardBody } from './CanvasCardBody';
 import { CanvasCardHeader } from './CanvasCardHeader';
+import { SceneProposalBar } from './SceneProposalBar';
 
 export type { ArtifactStageProps } from './artifact-stage-props';
 
@@ -42,6 +43,14 @@ export const ArtifactStage: React.FC<ArtifactStageProps> = props => {
             minHeight: 0
         }}>
         <CanvasCardHeader {...props} />
+
+        {props.sceneProposalReview?.proposal && (
+            <SceneProposalBar
+                proposal={props.sceneProposalReview.proposal}
+                onAccept={props.sceneProposalReview.accept}
+                onReject={props.sceneProposalReview.reject}
+            />
+        )}
 
         <CanvasCardBody {...props} />
     </div>
