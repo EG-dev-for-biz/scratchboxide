@@ -45,7 +45,8 @@ export interface ViewportHistoryControllerArgs {
 }
 
 /** Generated results that arrive without a user edit: never part of an undoable step. */
-const GENERATED_KEYS = ['stagedBuild', 'pythonGenerator', 'cppGenerator'];
+/** Scene keys holding generated results (a pipeline's build, a generator's source and model), never an edit's. */
+export const GENERATED_KEYS = ['stagedBuild', 'pythonGenerator', 'cppGenerator'];
 
 export function humanizeOperator(operator: string): string {
     const words = operator.replace(/^sb_/, '').replace(/[_\-]+/g, ' ').trim();

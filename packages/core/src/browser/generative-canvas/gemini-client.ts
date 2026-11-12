@@ -35,6 +35,9 @@ import { VisualVerificationRequest, VisualVerificationOutcome } from '../../comm
 /** Where a chat request failed: the local server was unreachable, it returned an error, or the AI request itself failed. */
 export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
 
+/** How the note chatRequestBody leaves in place of a large glbBase64 begins. A tool that hands the request's scene back returns it unchanged. */
+export const OMITTED_GLB_NOTE = '[omitted from the chat request:';
+
 /**
  * A request body for the chat and visual-check routes, with any large generated-model bytes (a scene's
  * pythonGenerator / cppGenerator glbBase64) replaced by a short note: the server reads models from their glbPath, and a
@@ -44,8 +47,13 @@ export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
 export function chatRequestBody(request: unknown): string {
     return JSON.stringify(request, (key, value) =>
         key === 'glbBase64' && typeof value === 'string' && value.length > 1_000_000
-            ? `[omitted from the chat request: ${value.length} base64 characters; the model is at glbPath]`
+            ? `${OMITTED_GLB_NOTE} ${value.length} base64 characters; the model is at glbPath]`
             : value);
+}
+
+/** True for chatRequestBody's note: the scene's model was not sent, so a scene carrying it has the model it had. */
+export function isOmittedGlbNote(value: unknown): boolean {
+    return typeof value === 'string' && value.startsWith(OMITTED_GLB_NOTE);
 }
 
 export class ChatRequestError extends Error {

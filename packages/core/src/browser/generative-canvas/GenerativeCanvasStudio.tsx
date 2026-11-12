@@ -173,6 +173,7 @@ import { useArtifactExports } from './hooks/useArtifactExports';
 import { useCanvasOpeners } from './hooks/useCanvasOpeners';
 import { useStageLayout } from './hooks/useStageLayout';
 import { useArtifactSync } from './hooks/useArtifactSync';
+import { useSceneProposalReview } from './hooks/useSceneProposalReview';
 import { useLayoutModeSwitch, useCreateEmptyCanvas, UseLayoutModeSwitchDeps } from './hooks/useLayoutModeSwitch';
 import { useWorkspaceFiles, useWorkspaceFileCreation, UseWorkspaceFilesDeps } from './hooks/useWorkspaceFiles';
 import { useCapabilities } from './hooks/useCapabilities';
@@ -1371,8 +1372,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // The 3D/VFX build (common/product-scope.ts) shows only the canvases it offers; the session keeps the others as saved.
     const visibleArtifactHistory = React.useMemo(() => artifactHistory.filter(a => canShowPrimitive(a.type)), [artifactHistory]);
+    // An agent edit held on the scene on stage, with Accept / Reject (services/scene-proposals.ts).
+    const sceneProposalReview = useSceneProposalReview({ activeArtifact, activeSession, currentSessionId, setSessions, updateArtifact: handleUpdateArtifact });
     const artifactStageProps: ArtifactStageProps = {
         activeArtifact: activeArtifact && canShowPrimitive(activeArtifact.type) ? activeArtifact : undefined,
+        sceneProposalReview,
         setActiveArtifact,
         artifactHistory: visibleArtifactHistory,
         setArtifactHistory,

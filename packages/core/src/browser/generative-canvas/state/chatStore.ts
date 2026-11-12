@@ -158,7 +158,7 @@ export const selectActiveSession = (state: ChatState): ChatSession | undefined =
     state.sessions.find(s => s.id === state.currentSessionId) || state.sessions[0];
 
 /** A chat as disk holds it (read, or last written). Compared by reference: every change in the store makes new arrays and objects. */
-export type ChatOnDisk = Pick<ChatSession, 'messages' | 'activeArtifact' | 'artifactHistory' | 'layoutMode'>;
+export type ChatOnDisk = Pick<ChatSession, 'messages' | 'activeArtifact' | 'artifactHistory' | 'layoutMode' | 'sceneProposals'>;
 
 /**
  * The open chat as it is written to disk, or undefined when there is nothing to write: no open chat, no messages yet
@@ -169,7 +169,8 @@ export const selectChatToWrite = (state: ChatState, onDisk?: ChatOnDisk): ChatSe
     const current = currentSessionId ? sessions.find(s => s.id === currentSessionId) : undefined;
     if (!current || messages.length === 0) return undefined;
     if (onDisk && onDisk.messages === messages && onDisk.activeArtifact === activeArtifact
-        && onDisk.artifactHistory === artifactHistory && onDisk.layoutMode === layoutMode) return undefined;
+        && onDisk.artifactHistory === artifactHistory && onDisk.layoutMode === layoutMode
+        && onDisk.sceneProposals === current.sceneProposals) return undefined;
     return { ...current, messages, activeArtifact, artifactHistory, layoutMode };
 };
 

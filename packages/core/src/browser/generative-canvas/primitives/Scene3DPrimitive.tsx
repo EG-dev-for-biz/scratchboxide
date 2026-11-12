@@ -39,7 +39,7 @@ import { useViewportHistory } from './scene3d/useViewportHistory';
 import { applyDisplayFlag, StepSnapshotView } from './scene3d/displayFlag';
 import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
-import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
+import { ObjectEditCapture, createGeometrySwapEdit, deepEqual } from '../services/viewport-history-deltas';
 import { attachHistoryShortcuts } from '../services/viewport-history';
 import { assetRecoveryClient, recoverableAssetPath, type AssetRecoveryState } from '../services/asset-recovery-client';
 import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
@@ -1089,17 +1089,14 @@ function generatedHeroObjectId(scene: Scene3DData): string | undefined {
     return (scene.objects || []).find(o => o.content?.metadata?.role === 'hero')?.id;
 }
 
-function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene3DData {
+export function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene3DData {
     // a clay/textured choice made on the open scene (materialMode, renderMode) holds over a later commit of the same run
     const data = carryStagedChoice(prev as StagedMaterialModeFields, streamed as Scene3DData & StagedMaterialModeFields);
-    const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
-    const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
-    const hasNewObjects = data.objects && data.objects !== prev.objects;
-    const hasNewTitle = data.title && data.title !== prev.title;
-    const hasNewGlb = (data.pythonGenerator?.glbBase64 && data.pythonGenerator.glbBase64 !== prev.pythonGenerator?.glbBase64) ||
-                      (data.cppGenerator?.glbBase64 && data.cppGenerator.glbBase64 !== prev.cppGenerator?.glbBase64);
-    const hasNewStaged = !!readStagedBuild(data) && readStagedBuild(data) !== readStagedBuild(prev);
-    if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb && !hasNewStaged) {
+    // Any top-level field whose value changed is taken in (an accepted edit may touch only the camera, a light or a mesh);
+    // the viewport's own round trip (onUpdate) hands back the same values, so it changes nothing.
+    const a = prev as unknown as Record<string, unknown>, b = data as unknown as Record<string, unknown>;
+    const changed = Object.keys(b).some(key => b[key] !== undefined && b[key] !== a[key] && !deepEqual(b[key], a[key]));
+    if (!changed) {
         return prev;
     }
     return {

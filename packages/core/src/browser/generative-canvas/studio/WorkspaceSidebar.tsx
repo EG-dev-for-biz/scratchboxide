@@ -15,6 +15,7 @@ import { ProjectItem } from '../ProjectsModal';
 import { FileTreeNode, POSE_3D_TREE, SCRATCHBOX_TREE } from './workspace-trees';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
 import { canCreatePrimitive, canShowLayoutMode, isScopedTo3dVfx } from '../../../common/product-scope';
+import { accountDisplayName, useScratchboxAccount } from '../services/scratchbox-account-client';
 
 export function getSessionIcon(session?: ChatSession): React.ReactElement | null {
     if (!session) return null;
@@ -70,7 +71,8 @@ export interface WorkspaceSidebarProps {
  * explorer, the add-file menu and the account footer. Owns its own search/expansion UI state.
  */
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = props => {
-    const activeUserName = getActiveUserName();
+    const account = useScratchboxAccount();
+    const activeUserName = accountDisplayName(account) ?? getActiveUserName();
     const { activeWorkspace, setActiveWorkspace, workspaces, sessions: allSessions, currentSessionId, isSidebarOpen, setIsSidebarOpen, handleCreateNewWorkspace, onCreateWorkspaceFile, handleDeleteSession, handleNewChat, handleSelectSession, onOpenFolder, onOpenWorkspace, openSettingsToTab, showToast, showNewWorkspaceMenu, setShowNewWorkspaceMenu, newWorkspaceInputName, setNewWorkspaceInputName, onFileClick } = props;
     // A file made as a document, sandbox or board is not listed in the 3D/VFX build (common/product-scope.ts); it stays saved.
     const sessions = React.useMemo(() => allSessions.filter(s => canShowLayoutMode(s.fileType || 'chat')), [allSessions]);
