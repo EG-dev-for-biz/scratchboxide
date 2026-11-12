@@ -298,7 +298,9 @@ describe('OpenAI adapter (Responses API)', () => {
 
         const input = sent[1].body.input;
         expect(input[1]).toMatchObject({ type: 'reasoning', id: 'rs_1', encrypted_content: 'enc-xyz' });
-        expect(input[3]).toMatchObject({ type: 'function_call', call_id: 'call_1', name: 'execute_script' });
+        // exactly the API's fields: the SDK helper's parsed_arguments / parsed are not sent back (the API answers 400)
+        expect(input[2]).toEqual({ type: 'message', id: 'msg_1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Building it now.', annotations: [] }] });
+        expect(input[3]).toEqual({ type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'execute_script', arguments: '{"code":"print(1)"}', status: 'completed' });
         expect(input[4]).toEqual({
             type: 'function_call_output', call_id: 'call_1',
             output: [

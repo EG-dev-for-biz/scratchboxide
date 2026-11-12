@@ -53,6 +53,21 @@ function inputMessage(m: PromptMessage): ResponseInputItem {
     } as ResponseInputItem;
 }
 
+/**
+ * A response's output items as input for the next call. The SDK's stream helper (ResponsesParser) adds
+ * `parsed_arguments` to function calls and `parsed` to output_text parts; sent back, the API answers 400 "Unknown
+ * parameter: 'input[2].parsed_arguments'". Those two fields are dropped; everything else goes back unchanged.
+ */
+export function replayableOutput(output: OpenAIResponse['output'] | undefined): ResponseInputItem[] {
+    return (output || []).map(item => {
+        const { parsed_arguments: _pa, ...rest } = item as typeof item & { parsed_arguments?: unknown };
+        if (rest.type === 'message' && Array.isArray(rest.content)) {
+            return { ...rest, content: rest.content.map(part => { const { parsed: _p, ...kept } = part as typeof part & { parsed?: unknown }; return kept; }) } as unknown as ResponseInputItem;
+        }
+        return rest as unknown as ResponseInputItem;
+    });
+}
+
 export function openaiTools(declarations: ToolDeclaration[]): FunctionTool[] {
     // strict: false — strict mode needs every property required and no extra keys, which the declarations do not promise.
     return declarations.map(d => ({ type: 'function', name: d.name, description: d.description || d.name, parameters: toolInputSchema(d), strict: false }));
@@ -182,8 +197,9 @@ export class OpenAIChatSession implements ChatSession {
         if (incomplete && calls.length > 0) {
             return { text, toolCalls: [], finishReason: incomplete === 'max_output_tokens' ? 'MAX_TOKENS' : incomplete, usage, stopNotice: `The OpenAI response ended early (${incomplete}) while writing a call to ${calls[calls.length - 1].name}, so it was not run.` };
         }
-        // Every output item goes back as it came (reasoning items with their encrypted content included).
-        this.input.push(...(final.output as unknown as ResponseInputItem[]));
+        // Every output item goes back as it came (reasoning items with their encrypted content included), less what the
+        // SDK's parse helper added to them (the API refuses `parsed_arguments` and `parsed` as input).
+        this.input.push(...replayableOutput(final.output));
         const toolCalls: AgentToolCall[] = calls.map(c => {
             let args: Record<string, unknown> = {};
             let invalid: string | undefined;
