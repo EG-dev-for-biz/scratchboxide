@@ -6,6 +6,7 @@
  * of this file, via any medium, is strictly prohibited without explicit written
  * permission from Scratchbox LLC.
  ********************************************************************************/
+import { subagentModelFor } from '../common/chat-models';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
@@ -342,7 +343,8 @@ export class GeminiService {
         try {
             const response = await this.streaming.streamGenerate({
                 prompt: `${SUBAGENT_BRIEF}\n\nTASK:\n${task}`,
-                model: parent.subagentModel || DEFAULT_SUBAGENT_MODEL,
+                // the chat's own provider (common/chat-models.ts subagentModelFor): a Claude or OpenAI chat delegates to its own
+                model: subagentModelFor(parent.model, parent.subagentModel),
                 mode: 'ask',
                 isSubagentRun: true,
                 workspaceRoot: parent.workspaceRoot,
