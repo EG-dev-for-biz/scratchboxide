@@ -22,8 +22,16 @@ export interface LiveTilesAnchorInput {
     geoidUndulationMeters?: number;
 }
 
-/** The scene asks for live tiles: it has an active geoAnchor, or a map-3d object. */
-export function sceneAsksForLiveTiles(scene: Pick<Scene3DData, 'geoAnchor' | 'objects'>): boolean {
+/**
+ * The scene asks for live tiles: it has an active geoAnchor, or a map-3d object, and it is not a staged build.
+ *
+ * A staged build (google_3d_tiles_get_clay: 3D Building and 3D Scene) never streams Google's tiles live around it
+ * (user rule, 2026-11-11): the user interface shows only what the pipeline retrieved and converted into its own models.
+ * Its geoAnchor still places it (sun, weather, the map data view); it just draws no live tiles. This holds for scenes
+ * saved before the rule too, whatever ground tile mode they carry.
+ */
+export function sceneAsksForLiveTiles(scene: Pick<Scene3DData, 'geoAnchor' | 'objects'> & { stagedBuild?: unknown }): boolean {
+    if (scene.stagedBuild) return false;
     return !!((scene.geoAnchor && scene.geoAnchor.active !== false) || scene.objects?.some(o => o?.content?.type === 'map-3d'));
 }
 
@@ -67,7 +75,7 @@ export function checkLiveTilesAnchor(anchor: LiveTilesAnchorInput | null | undef
 }
 
 /** Why the live tiles a scene asks for cannot be placed; null when it asks for none or its anchor is usable. */
-export function liveTilesAnchorProblem(scene: Pick<Scene3DData, 'geoAnchor' | 'objects'>): string | null {
+export function liveTilesAnchorProblem(scene: Pick<Scene3DData, 'geoAnchor' | 'objects'> & { stagedBuild?: unknown }): string | null {
     if (!sceneAsksForLiveTiles(scene)) return null;
     const check = checkLiveTilesAnchor(liveTilesAnchor(scene));
     return check.ok ? null : check.reason;

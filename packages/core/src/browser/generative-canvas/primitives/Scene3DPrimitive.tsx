@@ -2009,7 +2009,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // sceneDataRef is declared next to mutateSceneData above.
 
     // ---- Slice fingerprints -------------------------------------------------------
-    const has3DTiles = React.useMemo(() => sceneAsksForLiveTiles(sceneData), [sceneData.geoAnchor, sceneData.objects]);
+    // a staged build never streams live tiles (sceneAsksForLiveTiles): only its presence matters, not its progress
+    const isStagedScene = !!sceneData.stagedBuild;
+    const has3DTiles = React.useMemo(() => sceneAsksForLiveTiles(sceneData), [sceneData.geoAnchor, sceneData.objects, isStagedScene]);
 
     const effectiveGroundTileMode: GroundTileMode = React.useMemo(() => {
         if (sceneData.groundTileMode) return sceneData.groundTileMode;
