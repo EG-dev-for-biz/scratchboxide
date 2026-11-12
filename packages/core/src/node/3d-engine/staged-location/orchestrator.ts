@@ -120,7 +120,8 @@ import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { carriagewayLevelAt, removeStreetResidue, streetResidueEnabled, writeStreetResidue, STREET_RESIDUE_VERSION, type StreetResidueReport } from './street-residue';
 import { SURFACE_INFILL_VERSION } from './surface-infill';
-import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
+import { removeVehiclesOffThread } from './vehicle-removal-run';
+import { vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
@@ -2541,16 +2542,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     type V = { textured: string; geometry: string; report: VehicleRemovalReport };
                     const entry = await cache.run<V>('vehicles', key, async dir => {
                         io.progress('reading the vehicles from above');
-                        const scan = t.scan ?? loadScanMesh(e.texturedGlb);
-                        const ground = buildGroundModel(scan, { cellMeters: 1, ...(look ? { water: look.waterAt, road: look.roadAt } : {}) });
                         // SCRATCHBOX_VEHICLES_MODEL: a model tried first for these reads (a faster one; not the default until a checked set shows it reads as well)
                         const vehicleModel = process.env.SCRATCHBOX_VEHICLES_MODEL?.trim();
                         const chain = new VisionModelChain<string>({ client: vis.client, candidates: vehicleModel ? [vehicleModel, ...vis.candidates.filter(m => m !== vehicleModel)] : vis.candidates, signal: io.signal, ...chainExtras('vehicles'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                        const out = await removeVehicles({
-                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), outDir: dir, signal: io.signal, P: vehicleParams,
-                            look: { ...(look ? { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt } : {}), within: (x, z) => Math.hypot(x, z) <= covered },
-                            log: m => io.progress(m)
-                        });
+                        // the scan's load, its street model, the candidates, the crops, the surface infill and both patched GLBs run in a
+                        // worker thread (vehicle-removal-run.ts): live they held the main thread for minutes; the vision calls stay here
+                        const out = await removeVehiclesOffThread({
+                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, ...(t.scan ? { scan: t.scan } : { scanGlb: e.texturedGlb }), groundOptions: { cellMeters: 1 },
+                            lookups: { ...(look ? { raster: { building: look.raster.building, water: look.raster.water, road: look.raster.road }, grid: look.grid } : {}), within: { radiusM: covered } },
+                            outDir: dir, P: vehicleParams
+                        }, { judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), signal: io.signal, log: m => io.progress(m) });
                         if (out.report.failedCalls.length) throw new Error(`the vision model could not read ${out.report.failedCalls.length} of ${out.report.crops} crops (${out.report.failedCalls[0].error})`);
                         const rel = (p: string) => (path.dirname(p) === dir ? path.basename(p) : p);
                         return { value: { textured: rel(out.texturedGlb), geometry: rel(out.geometryGlb ?? e.geometryGlb), report: out.report } };
