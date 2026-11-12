@@ -180,6 +180,16 @@ Status: trial only (`~/.cache/scratchbox-sharp-trial/joint/between.ts`); not ado
 - From the proof cameras the merge is nearly indistinguishable from v7 beside the new view, and adds a floating patch on the road in camera A.
 - To help, the in-between view would have to bring content the render does not have: the two neighbours' real views as references, or a prompt and check that reward repair over fidelity to the render.
 
+### Depth Anything 3 as the street depth reference (v8, 2026-11-11)
+
+Status: built through the app's chat (v8, world cache off, fresh folder), once the machine's load was below 100. Two earlier v8 attempts stopped: one from the page a minute in, one by the chat's 15-minute no-progress stop at a load of about 340.
+
+- **Depth Anything 3 ran** (a new environment, `~/.cache/scratchbox-da3/venv`, Python 3.12, installed with `--no-deps` plus its working dependencies and `addict`): every level view of every panorama used `photo depth`, scaled by the scan where it agrees. Median residual to the scan 0.05-0.26 m, 75-100 % of each kept view within 10 %. `FS1Y4T` is still left out (fits 0.02-0.09).
+- **The second removal pass ran:** 18 of 24 kept level views were edited twice. After it the vision model still counts 0 in 12 views and 1-3 in the other 12.
+- v8: 9,279,865 predicted, 763,540 outside their cell, 0 thinned, 8,461,138 street splats, 10,514,761 in the world.
+- **Reading** (against v7, the scan reference, same cameras; an independent visual check): v7 reads slightly cleaner in three of four cameras. v8 shows a floating mast fragment beside the signal (A), a blown-out slab where v7 shows a brick facade (B) and a torn hole in the road (D); in C it adds sidewalk planters and trees and is roughly even. Crosswalks are equally sharp. Depth Anything 3 as the reference is therefore not an improvement here.
+- **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_da3_reference.png`.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
