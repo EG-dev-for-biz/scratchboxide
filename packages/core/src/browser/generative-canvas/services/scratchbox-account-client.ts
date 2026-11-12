@@ -10,19 +10,25 @@
 /**
  * The UI's view of Sign in with scratchbox.ai (the server's `/api/account`, desktop-app/server/routes/accountRoutes.ts).
  * One status shared by every component that shows it (Settings > Account, the sidebar's name), refreshed after a
- * sign-in or sign-out. The credential never reaches the UI: the server keeps it and reports only who and until when.
+ * sign-in or sign-out. No token reaches the UI: the server keeps them and reports only the connection's status.
  */
 
 import * as React from 'react';
 
 export interface AccountStatusView {
-    signedIn: boolean;
-    baseUrl: string;
-    user?: { id: string | number; username: string; email?: string; tier?: string };
-    workspace?: { id: string | number; name: string };
-    expiresAt?: string;
-    expiresSoon?: boolean;
+    connected: boolean;
+    connecting: boolean;
+    origin: string;
+    workspaceId: number | null;
+    connectionId: number | null;
+    identity?: { username?: string; email?: string; tier?: string; workspaceName?: string };
     reason?: string;
+}
+
+/** The name to show for a connected account (its username, else the workspace). */
+export function accountDisplayName(status: AccountStatusView | undefined): string | undefined {
+    if (!status?.connected) return undefined;
+    return status.identity?.username ?? (status.identity?.workspaceName ? status.identity.workspaceName : undefined);
 }
 
 type Listener = (status: AccountStatusView | undefined) => void;
@@ -55,9 +61,15 @@ export function refreshAccountStatus(): Promise<AccountStatusView | undefined> {
 /** Starts a sign-in: the server's consent URL opens in the system browser (Electron routes window.open there). */
 export async function startAccountSignIn(): Promise<string> {
     const body = await readJson(await fetch('/api/account/sign-in', { method: 'POST' }));
+    publish(body.status as AccountStatusView);
     const url = String(body.url);
     if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
     return url;
+}
+
+export async function cancelAccountSignIn(): Promise<void> {
+    const body = await readJson(await fetch('/api/account/cancel', { method: 'POST' }));
+    publish(body.status as AccountStatusView);
 }
 
 export async function signOutOfAccount(): Promise<{ revoked: boolean }> {
@@ -66,12 +78,12 @@ export async function signOutOfAccount(): Promise<{ revoked: boolean }> {
     return { revoked: body.revoked === true };
 }
 
-/** Polls until the account reads signed in or `timeoutMs` passes (the user finishes in their browser). */
-export async function waitForAccountSignIn(timeoutMs = 10 * 60_000, intervalMs = 2000, isCancelled: () => boolean = () => false): Promise<AccountStatusView | undefined> {
+/** Polls while the sign-in is in progress (the user finishes in their browser); returns the settled status. */
+export async function waitForAccountSignIn(timeoutMs = 6 * 60_000, intervalMs = 1500, isCancelled: () => boolean = () => false): Promise<AccountStatusView | undefined> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline && !isCancelled()) {
         const status = await refreshAccountStatus();
-        if (status?.signedIn) return status;
+        if (!status || status.connected || !status.connecting) return status;
         await new Promise(r => setTimeout(r, intervalMs));
     }
     return current;

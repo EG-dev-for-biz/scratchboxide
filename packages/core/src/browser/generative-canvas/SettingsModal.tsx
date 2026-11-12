@@ -24,7 +24,7 @@ import { McpTab } from './settings/tabs/McpTab';
 import { ShortcutsTab } from './settings/tabs/ShortcutsTab';
 import { AboutTab } from './settings/tabs/AboutTab';
 import { AccountTab } from './settings/tabs/AccountTab';
-import { useScratchboxAccount } from './services/scratchbox-account-client';
+import { accountDisplayName, useScratchboxAccount } from './services/scratchbox-account-client';
 import { MemoriesTab } from './settings/tabs/MemoriesTab';
 import { AdminTab } from './settings/tabs/AdminTab';
 import { ShowcaseDemoItem } from './demos/preloadedDemos';
@@ -99,7 +99,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     // All per-control settings live in one reducer-backed store (see settings/settingsReducer.ts)
     const { state: settingsState, setters: settingsSetters } = useSettingsStore({ propGoogleSearchGrounding });
     const account = useScratchboxAccount();
-    const activeUserName = account?.signedIn && account.user?.username ? account.user.username : getActiveUserName(`${settingsState.firstName} ${settingsState.lastName}`.trim());
+    const activeUserName = accountDisplayName(account) ?? getActiveUserName(`${settingsState.firstName} ${settingsState.lastName}`.trim());
 
     const settingsHandlers = useSettingsHandlers({
         activeWorkspace,

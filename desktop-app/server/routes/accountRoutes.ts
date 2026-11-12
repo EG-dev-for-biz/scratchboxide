@@ -8,75 +8,101 @@
  ********************************************************************************/
 
 /**
- * Sign in with scratchbox.ai (packages/core/src/node/scratchbox-account). Under `/api/account`, behind the launch token:
- * `POST /sign-in` (the consent page's URL to open), `GET /status` (who, where, until when; never the credential) and
- * `POST /sign-out`. The browser's way back, `GET /auth/scratchbox/callback`, cannot carry the launch token: it is an open
- * route, and only a sign-in this server started (its one-time `state`) can complete there.
+ * Sign in with scratchbox.ai (packages/core/src/node/scratchbox-account), mounted under `/api` behind the launch token
+ * and the allowed-origin check. Tokens never leave the server: the UI gets status and the consent page's URL only.
+ *
+ * - `/api/account`: `POST /sign-in` (starts a connection; answers the consent URL to open, then finishes in the
+ *   background when the browser comes back to the account's own loopback listener), `POST /cancel`, `GET /status`,
+ *   `POST /sign-out` (revokes this device on scratchbox.ai, then forgets it).
+ * - `/api/studio`: the connected workspace's hosted tools for the agent and UI: `GET /status`, `GET /identity`,
+ *   `GET /tools` (`cursor`), `POST /tools/call` (`{name, arguments}`), `POST /media` (`{storagePath}` → a signed URL).
+ *   The server's tool discovery is authoritative; nothing here retries a failed call.
  */
 
-import { Request, RequestHandler, Response, Router } from 'express';
-import { AccountError, ScratchboxAccount, getScratchboxAccount } from '../../../packages/core/src/node/scratchbox-account/scratchbox-account';
+import { Request, Response, Router } from 'express';
+import { getScratchboxAccount } from '../../../packages/core/src/node/scratchbox-account/account-service';
+import type { DesktopAccount } from '../../../packages/core/src/node/scratchbox-account/desktop-account';
+import { callStudioRequest, callStudioTool } from '../../../packages/core/src/node/scratchbox-studio/studio-mcp-client';
 import { RouteContext } from './types';
 
-export function createAccountRouter(ctx: RouteContext, account: ScratchboxAccount = getScratchboxAccount()): Router {
-    const router = Router();
+/** Only the account's own fixed messages reach the UI, never a server's answer or a URL. */
+const FIXED = /^(Scratchbox |Secure OS|Saved Scratchbox|Finish or cancel|Disconnect the current|The saved Scratchbox)/;
+const messageOf = (err: unknown) => (err instanceof Error && FIXED.test(err.message) ? err.message : 'Scratchbox request failed. Connect again or manage this device on scratchbox.ai.');
 
-    router.post('/sign-in', (req: Request, res: Response) => {
+export function createAccountRouter(ctx: RouteContext, account: () => DesktopAccount = getScratchboxAccount): Router {
+    const router = Router();
+    router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+
+    router.post('/sign-in', async (_req: Request, res: Response) => {
+        let opened!: (url: string) => void;
+        const consentUrl = new Promise<string>(resolve => { opened = resolve; });
+        const connecting = account().connect(async url => { opened(url); });
+        connecting.catch(() => undefined); // its outcome shows in the status
         try {
-            const port = req.socket.localPort;
-            if (!port) throw new AccountError('invalid_request', 'The server could not tell which port it is listening on.');
-            const { url } = account.start({ port });
-            res.setHeader('Cache-Control', 'no-store');
-            res.json({ success: true, url });
+            const url = await Promise.race([consentUrl, connecting.then(() => { throw new Error('Scratchbox sign-in finished before the browser opened.'); })]);
+            res.json({ success: true, url, status: account().status() });
         } catch (err) {
-            if (err instanceof AccountError) { res.status(400).json({ success: false, error: err.message, code: err.code }); return; }
+            res.status(409).json({ success: false, error: messageOf(err), status: account().status() });
+        }
+    });
+
+    router.post('/cancel', async (_req: Request, res: Response) => {
+        try {
+            await account().cancel();
+            res.json({ success: true, status: account().status() });
+        } catch (err) {
             ctx.sendError(res, err);
         }
     });
 
-    router.get('/status', async (_req: Request, res: Response) => {
-        try {
-            res.setHeader('Cache-Control', 'no-store');
-            res.json({ success: true, status: await account.status() });
-        } catch (err) {
-            ctx.sendError(res, err);
-        }
+    router.get('/status', (_req: Request, res: Response) => {
+        res.json({ success: true, status: account().status() });
     });
 
     router.post('/sign-out', async (_req: Request, res: Response) => {
         try {
-            const { revoked } = await account.signOut();
-            res.json({ success: true, revoked, status: await account.status() });
+            const { revoked } = await account().disconnect();
+            res.json({ success: true, revoked, status: account().status() });
         } catch (err) {
-            ctx.sendError(res, err);
+            res.status(500).json({ success: false, error: messageOf(err), status: account().status() });
         }
     });
 
     return router;
 }
 
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-
-/** The page the browser lands on; `closeSelf` closes it when the browser allows (a tab a script opened), else the text says to. */
-function resultPage(title: string, body: string, closeSelf = false): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title>`
-        + '<style>body{font-family:-apple-system,system-ui,sans-serif;background:#18181b;color:#f4f4f5;display:grid;place-items:center;min-height:100vh;margin:0}'
-        + 'main{max-width:420px;padding:32px;text-align:center}h1{font-size:20px;margin:0 0 12px}p{color:#a1a1aa;line-height:1.5;margin:0}</style></head>'
-        + `<body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p></main>${closeSelf ? '<script>setTimeout(function(){window.close()},1500)</script>' : ''}</body></html>`;
-}
-
-/** The browser's return from scratchbox.ai's consent page: completes the sign-in and tells the user to go back to the IDE. */
-export function createAccountCallbackHandler(account: ScratchboxAccount = getScratchboxAccount()): RequestHandler {
-    return async (req: Request, res: Response) => {
-        const q = (k: string) => (typeof req.query[k] === 'string' ? (req.query[k] as string) : undefined);
-        res.setHeader('Cache-Control', 'no-store');
-        res.setHeader('Referrer-Policy', 'no-referrer');
-        try {
-            const profile = await account.complete({ code: q('code'), state: q('state'), error: q('error') });
-            res.type('html').send(resultPage('Signed in to Scratchbox IDE', `You are signed in as ${profile.user.username} for the workspace ${profile.workspace.name}. You can close this tab and return to Scratchbox IDE.`, true));
-        } catch (err) {
-            const message = err instanceof AccountError ? err.message : 'The sign-in could not be completed. Start it again from Scratchbox IDE.';
-            res.status(err instanceof AccountError && err.code === 'access_denied' ? 200 : 400).type('html').send(resultPage('Not signed in', message));
+export function createStudioRouter(account: () => DesktopAccount = getScratchboxAccount): Router {
+    const router = Router();
+    router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+    const handle = (operation: (req: Request) => Promise<unknown>) => async (req: Request, res: Response) => {
+        try { res.json(await operation(req)); }
+        catch (err) {
+            const known = err instanceof Error && (FIXED.test(err.message) || err.name === 'StudioMcpError');
+            res.status(502).json({ error: known ? (err as Error).message : 'Scratchbox request did not finish successfully. It was not retried; check its operation before repeating a change.' });
         }
     };
+    const config = () => {
+        const c = account().studioConfig();
+        if (!c) throw new Error('Scratchbox workspace not connected: connect one in Settings > Account.');
+        return c;
+    };
+    router.get('/status', (_req, res) => { res.json(account().status()); });
+    router.get('/identity', handle(() => account().identity()));
+    router.get('/tools', handle(req => {
+        const cursor = req.query.cursor;
+        if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length > 2048)) throw new Error('Scratchbox tools cursor is invalid.');
+        return callStudioRequest(config(), 'tools/list', cursor ? { cursor } : {});
+    }));
+    router.post('/tools/call', handle(req => {
+        const { name, arguments: args } = req.body ?? {};
+        if (typeof name !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(name) || !args || typeof args !== 'object' || Array.isArray(args)) {
+            throw new Error('Scratchbox tool call is invalid: give a tool name and an arguments object.');
+        }
+        return callStudioTool(config(), name, args);
+    }));
+    router.post('/media', handle(req => {
+        if (typeof req.body?.storagePath !== 'string' || req.body.storagePath.length > 2048) throw new Error('Scratchbox media path is invalid.');
+        return account().mediaUrl(req.body.storagePath).then(url => ({ url }));
+    }));
+    return router;
 }

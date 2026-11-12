@@ -8,110 +8,150 @@
  ********************************************************************************/
 
 /**
- * The account routes (accountRoutes.ts) on a real Express server: the sign-in URL's callback is this server's own port,
- * the status never carries the credential, and the open callback completes only a sign-in this server started, with
- * whatever it echoes HTML-escaped. scratchbox.ai is a local stand-in; nothing leaves the machine.
+ * Sign in with scratchbox.ai end to end over real HTTP: the server's /api/account and /api/studio routes on Express, a
+ * real DesktopAccount with the development key-file vault in a temporary file, and the local scratchbox.ai stand-in
+ * (scripts/dev/scratchbox-ai-standin.cjs). The "browser" reads the consent page and follows its Approve link to the
+ * account's loopback listener. Checks the status never carries a token, the hosted tools and signed media through the
+ * connection, a refresh that rotates, a revoke from the web, and sign-out revoking on the stand-in.
  */
 
-import * as crypto from 'crypto';
 import express from 'express';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createAccountCallbackHandler, createAccountRouter } from '../server/routes/accountRoutes';
+import { createAccountRouter, createStudioRouter } from '../server/routes/accountRoutes';
 import type { RouteContext } from '../server/routes/types';
 import { FileKeyStore } from '../../packages/core/src/node/key-store';
-import { ACCOUNT_CALLBACK_PATH, ScratchboxAccount, pkceChallenge } from '../../packages/core/src/node/scratchbox-account/scratchbox-account';
+import { DesktopAccount } from '../../packages/core/src/node/scratchbox-account/desktop-account';
+import { KeyFileDesktopVault } from '../../packages/core/src/node/scratchbox-account/desktop-vault';
 
-const b64url = (b: Buffer) => b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { createStandin } = require('../../scripts/dev/scratchbox-ai-standin.cjs');
 
-let web: http.Server, ide: http.Server;
-let webBase = '', ideBase = '', idePort = 0, tmp = '';
-const issued = new Map<string, string>();
-const live = new Set<string>();
-
-const listen = (s: http.Server) => new Promise<number>(r => s.listen(0, '127.0.0.1', () => r((s.address() as { port: number }).port)));
+let standin: any, web = '', ide: http.Server, ideBase = '', tmp = '', credentialsFile = '';
+let account: DesktopAccount;
 
 beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-account-routes-'));
-    web = http.createServer((req, res) => {
-        let raw = '';
-        req.on('data', c => { raw += c; });
-        req.on('end', () => {
-            res.setHeader('content-type', 'application/json');
-            if (req.url === '/api/auth/desktop/token') {
-                const body = JSON.parse(raw);
-                const challenge = issued.get(body.code);
-                if (!challenge || pkceChallenge(body.code_verifier) !== challenge) { res.statusCode = 400; res.end('{"success":false,"error":"invalid_grant"}'); return; }
-                const credential = `sbmcp_${b64url(crypto.randomBytes(32))}`;
-                live.add(credential);
-                res.end(JSON.stringify({ success: true, data: { credential, expiresAt: new Date(Date.now() + 90 * 86_400_000).toISOString(), user: { id: 7, username: '<b>ada</b>' }, workspace: { id: 3, name: 'Main' } } }));
-                return;
-            }
-            if (req.url === '/api/auth/desktop/revoke') { const ok = live.delete(String(req.headers.authorization).slice(7)); res.statusCode = ok ? 200 : 401; res.end('{}'); return; }
-            res.statusCode = 404; res.end('{}');
-        });
-    });
-    webBase = `http://127.0.0.1:${await listen(web)}`;
-
-    const account = new ScratchboxAccount({ store: new FileKeyStore({ filePath: path.join(tmp, 'credentials.json') }), env: { SCRATCHBOX_ACCOUNT_URL: webBase } });
+    credentialsFile = path.join(tmp, 'credentials.json');
+    standin = createStandin();
+    web = await standin.listen();
+    account = new DesktopAccount({ origin: web, vault: new KeyFileDesktopVault(new FileKeyStore({ filePath: credentialsFile })), device: 'test-mac', callbackTimeoutMs: 10_000 });
     const ctx = { sendError: (res: express.Response, err: unknown) => { res.status(500).json({ success: false, error: String(err) }); } } as unknown as RouteContext;
     const app = express();
     app.use(express.json());
-    app.use('/api/account', createAccountRouter(ctx, account));
-    app.get(ACCOUNT_CALLBACK_PATH, createAccountCallbackHandler(account));
+    app.use('/api/account', createAccountRouter(ctx, () => account));
+    app.use('/api/studio', createStudioRouter(() => account));
     ide = http.createServer(app);
-    idePort = await listen(ide);
-    ideBase = `http://127.0.0.1:${idePort}`;
+    await new Promise<void>(r => ide.listen(0, '127.0.0.1', () => r()));
+    ideBase = `http://127.0.0.1:${(ide.address() as { port: number }).port}`;
 });
 
 afterAll(async () => {
-    await new Promise<void>(r => web.close(() => r()));
+    account.close();
     await new Promise<void>(r => ide.close(() => r()));
+    await standin.close();
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-describe('account routes', () => {
-    it('signs in through the callback, reports the status without the credential, and signs out', async () => {
-        expect((await (await fetch(`${ideBase}/api/account/status`)).json()).status.signedIn).toBe(false);
+const status = async () => (await (await fetch(`${ideBase}/api/account/status`)).json()).status;
 
-        const started = await (await fetch(`${ideBase}/api/account/sign-in`, { method: 'POST' })).json();
-        const u = new URL(started.url);
-        expect(u.origin).toBe(webBase);
-        expect(u.searchParams.get('redirect_uri')).toBe(`http://127.0.0.1:${idePort}${ACCOUNT_CALLBACK_PATH}`);
+/** The user's browser: open the consent page and click Approve (or Deny). */
+async function approve(consentUrl: string, choice: 'approve' | 'deny' = 'approve'): Promise<string> {
+    const page = await (await fetch(consentUrl)).text();
+    const href = page.match(new RegExp(`id="${choice}"[^>]*href="([^"]+)"`))![1].replace(/&#38;/g, '&');
+    return (await fetch(href)).text();
+}
 
-        // The consent page approves and the browser goes back to the redirect URI.
-        const code = b64url(crypto.randomBytes(16));
-        issued.set(code, u.searchParams.get('code_challenge')!);
-        const back = new URL(u.searchParams.get('redirect_uri')!);
-        back.searchParams.set('code', code);
-        back.searchParams.set('state', u.searchParams.get('state')!);
-        const page = await fetch(back);
-        const html = await page.text();
-        expect(page.status).toBe(200);
-        expect(page.headers.get('cache-control')).toBe('no-store');
-        expect(html).toContain('Signed in to Scratchbox IDE');
-        expect(html).toContain('&lt;b&gt;ada&lt;/b&gt;');
-        expect(html).not.toContain('<b>ada</b>');
+async function until(check: () => Promise<boolean>, ms = 5000) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error(`timed out; status ${JSON.stringify(await status())}; stand-in events ${JSON.stringify(standin.events)}`);
+}
 
-        const statusRes = await fetch(`${ideBase}/api/account/status`);
-        const statusText = await statusRes.text();
-        expect(JSON.parse(statusText).status).toMatchObject({ signedIn: true, workspace: { id: 3, name: 'Main' } });
-        expect(statusText).not.toMatch(/sbmcp_/);
-        expect(live.size).toBe(1);
+async function signIn() {
+    const started = await (await fetch(`${ideBase}/api/account/sign-in`, { method: 'POST' })).json();
+    expect(started.success).toBe(true);
+    const html = await approve(started.url);
+    await until(async () => (await status()).connected === true);
+    return { started, html };
+}
+
+describe('Sign in with scratchbox.ai through the server routes', () => {
+    it('connects through the consent page, never shows a token, uses the hosted tools and media, and signs out with a revoke', async () => {
+        expect(await status()).toMatchObject({ connected: false, connecting: false, origin: web });
+
+        const { started, html } = await signIn();
+        const consent = new URL(started.url);
+        expect(`${consent.origin}${consent.pathname}`).toBe(`${web}/connect/desktop`);
+        expect(consent.searchParams.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/auth\/scratchbox\/callback$/);
+        expect(consent.searchParams.get('device')).toBe('test-mac');
+        expect(html).toContain('Return to Scratchbox IDE');
+
+        await until(async () => !!(await status()).identity);
+        const statusText = await (await fetch(`${ideBase}/api/account/status`)).text();
+        expect(JSON.parse(statusText).status).toMatchObject({ connected: true, workspaceId: 217, identity: { username: 'standin-user', workspaceName: 'Stand-in Studio' } });
+        expect(statusText).not.toMatch(/sbmcp_|sbdr_/);
+        expect(fs.readFileSync(credentialsFile, 'utf8')).not.toMatch(/sbdr_|sbmcp_/);
+
+        const tools = await (await fetch(`${ideBase}/api/studio/tools`)).json();
+        expect(tools.tools.map((t: { name: string }) => t.name)).toContain('auth.whoami');
+        const who = await (await fetch(`${ideBase}/api/studio/tools/call`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'auth.whoami', arguments: {} }) })).json();
+        expect(who).toEqual({ user: 'standin-user', workspaceId: 217 });
+        const unknown = await fetch(`${ideBase}/api/studio/tools/call`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'nope', arguments: {} }) });
+        expect(unknown.status).toBe(502);
+        expect((await unknown.json()).error).toMatch(/Tool nope not found/);
+
+        const media = await (await fetch(`${ideBase}/api/studio/media`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ storagePath: 'uploads/workspaces/217/image/a.jpg' }) })).json();
+        expect(media.url).toMatch(new RegExp(`^${web}/signed/`));
+        const bytes = Buffer.from(await (await fetch(media.url)).arrayBuffer());
+        expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+
+        // an expired access token is renewed once, with the refresh token rotated
+        standin.expireAccess();
+        expect((await (await fetch(`${ideBase}/api/studio/tools`)).json()).tools).toBeDefined();
+        expect(standin.events.filter((e: { event: string }) => e.event === 'refreshed')).toHaveLength(1);
 
         const out = await (await fetch(`${ideBase}/api/account/sign-out`, { method: 'POST' })).json();
-        expect(out).toMatchObject({ success: true, revoked: true, status: { signedIn: false } });
-        expect(live.size).toBe(0);
+        expect(out).toMatchObject({ success: true, revoked: true, status: { connected: false } });
+        expect(standin.events.some((e: { event: string }) => e.event === 'revoked')).toBe(true);
+        expect(fs.readFileSync(credentialsFile, 'utf8')).not.toContain('desktop-grant');
     });
 
-    it('answers a callback it did not start with a plain refusal page', async () => {
-        const res = await fetch(`${ideBase}${ACCOUNT_CALLBACK_PATH}?code=abc&state=%3Cscript%3E`);
-        const html = await res.text();
-        expect(res.status).toBe(400);
-        expect(html).toContain('Not signed in');
-        expect(html).not.toContain('<script>');
+    it('a declined consent leaves the IDE signed out', async () => {
+        const started = await (await fetch(`${ideBase}/api/account/sign-in`, { method: 'POST' })).json();
+        const html = await approve(started.url, 'deny');
+        expect(html).toContain('declined');
+        await until(async () => (await status()).connecting === false);
+        expect((await status()).connected).toBe(false);
+    });
+
+    it('a second sign-in while one is pending is refused, and cancel stops the pending one', async () => {
+        const first = await (await fetch(`${ideBase}/api/account/sign-in`, { method: 'POST' })).json();
+        expect(first.success).toBe(true);
+        const second = await fetch(`${ideBase}/api/account/sign-in`, { method: 'POST' });
+        expect(second.status).toBe(409);
+        expect((await second.json()).error).toMatch(/Finish or cancel/);
+        const cancelled = await (await fetch(`${ideBase}/api/account/cancel`, { method: 'POST' })).json();
+        expect(cancelled.status).toMatchObject({ connected: false, connecting: false });
+    });
+
+    it('a revoke from the web signs the IDE out on its next call, with the reason', async () => {
+        await signIn();
+        const connectionId = (await status()).connectionId;
+        standin.revoke(connectionId);
+        const call = await fetch(`${ideBase}/api/studio/tools`);
+        expect(call.status).toBe(502);
+        const after = await status();
+        expect(after.connected).toBe(false);
+        expect(after.reason).toMatch(/revoked or expired/);
+    });
+
+    it('the hosted tool routes refuse while nothing is connected', async () => {
+        const res = await fetch(`${ideBase}/api/studio/tools`);
+        expect(res.status).toBe(502);
+        expect((await res.json()).error).toMatch(/not connected/);
     });
 });

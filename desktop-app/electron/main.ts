@@ -7,12 +7,13 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { app, BrowserWindow, shell, ipcMain, dialog, OpenDialogOptions, SaveDialogOptions } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog, OpenDialogOptions, SaveDialogOptions, safeStorage } from 'electron';
 import { exec } from 'child_process';
 import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createStandaloneServer, createToolsServer, resolveLaunchToken } from '../server/app';
+import { closeScratchboxAccount } from '../../packages/core/src/node/scratchbox-account/account-service';
 import { resolveRendererDist } from '../server/renderer-dist';
 import { warmNativeEngine } from '../../packages/core/src/node/3d-engine/native-warmup';
 import type { GeminiService } from '../../packages/core/src/node/gemini-service';
@@ -129,7 +130,10 @@ async function startBackendServer(): Promise<void> {
     const serverApp = createStandaloneServer({
         port: BACKEND_PORT,
         toolsPort: TOOLS_PORT,
-        staticDir: rendererDist
+        staticDir: rendererDist,
+        // The scratchbox.ai connection's refresh token goes in the OS keychain, never a plaintext or machine-key file.
+        accountEncryption: safeStorage,
+        accountDataDir: app.getPath('userData')
     });
 
     return new Promise((resolve) => {
@@ -405,6 +409,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+    // Stop a sign-in in progress; a settled saved connection stays.
+    closeScratchboxAccount();
     serverInstance?.close();
     toolsServerInstance?.close();
 });
