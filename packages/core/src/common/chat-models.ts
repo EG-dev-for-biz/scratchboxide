@@ -64,6 +64,27 @@ export function providerForChatModel(model: string | undefined): ChatProviderId 
     return 'gemini';
 }
 
+/**
+ * The fast model each provider's subagents run on (invoke_subagent): a chat on Claude or OpenAI delegates to its own
+ * provider, so it needs no Google credentials for its helpers (user ask, 2026-11-12).
+ */
+export const SUBAGENT_MODEL_FOR_PROVIDER: Record<ChatProviderId, string> = {
+    gemini: 'gemini-3.5-flash-lite',
+    anthropic: 'claude-haiku-5-5',
+    openai: 'gpt-6.1-terra'
+};
+
+/**
+ * The model a chat's subagent runs on: the subagent model the chat set when it is the chat's own provider (Settings
+ * picks among Gemini models), else that provider's fast model.
+ */
+export function subagentModelFor(chatModel: string | undefined, chosenSubagentModel?: string): string {
+    const provider = providerForChatModel(chatModel);
+    const chosen = chosenSubagentModel?.trim();
+    if (chosen && providerForChatModel(chosen) === provider) return chosen;
+    return SUBAGENT_MODEL_FOR_PROVIDER[provider];
+}
+
 /** The picker's label for a model id (the id itself when it is not listed). */
 export function chatModelLabel(model: string): string {
     return CHAT_MODEL_OPTIONS.find(m => m.id === model)?.label || model;
