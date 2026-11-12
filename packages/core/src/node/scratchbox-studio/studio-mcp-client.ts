@@ -9,26 +9,55 @@
 
 /**
  * A client for the hosted Scratchbox Studio MCP (scratchbox.ai/api/mcp/canvas, docs/integrations/mcp/README.md): JSON-RPC
- * over Streamable HTTP, authenticated by the internal secret, user id and workspace id headers. Used for the workspace's
- * Style DNA: `ai.generate_images` with `inheritCanvasStyle` applies the saved canvas/workspace style, and explicit
- * presets override fields of it. Generation is a durable, billed job: queued, then polled with `operation.get` until
- * terminal, and its image fetched from the workspace's public storage URL.
+ * over Streamable HTTP. It acts as the workspace the user connected with Sign in with scratchbox.ai
+ * (packages/core/src/node/scratchbox-account): a short-lived bearer token from the account, refreshed as needed, never
+ * replayed after a transport failure (a paid or mutating call may already be queued). Used for the workspace's Style DNA:
+ * `ai.generate_images` with `inheritCanvasStyle` applies the saved canvas/workspace style, and explicit presets override
+ * fields of it. Generation is a durable, billed job: queued, then polled with `operation.get` until terminal, and its
+ * image fetched through a signed URL for the workspace storage path.
  */
+
+import { getScratchboxAccount } from '../scratchbox-account/account-service';
+import type { DesktopAccount } from '../scratchbox-account/desktop-account';
 
 export interface StudioMcpConfig {
     endpoint: string;
-    secret: string;
-    userId: string;
     workspaceId: string;
     canvasId?: string;
+    /** The connected account's current access token (refreshed by the account; never stored here). */
+    getAccessToken?(): Promise<string>;
+    /** A signed URL for a workspace storage path or `/api/storage/serve` link (fetched without any account header). */
+    resolveMedia?(reference: string): Promise<string>;
+    /** scratchbox.ai refused the token (401): the account renews it once (true: retry this call once) or forgets the connection. */
+    onCredentialRejected?(): Promise<boolean>;
+    /**
+     * Development only: the server's internal secret and a user id from SCRATCHBOX_MCP_* in a developer's own
+     * secrets.json, used while no workspace is connected. It can act as any user, so it is never part of a release;
+     * it goes when scratchbox.ai's desktop connection is live.
+     */
+    secret?: string;
+    userId?: string;
 }
 
-/** The connection from SCRATCHBOX_MCP_* (secrets.json, loaded by the server); undefined when any required value is missing. */
+/** The development connection from SCRATCHBOX_MCP_* (secrets.json, loaded by the server); undefined when any required value is missing. */
 export function studioMcpConfigFromEnv(env: Record<string, string | undefined> = process.env): StudioMcpConfig | undefined {
     const secret = env.SCRATCHBOX_MCP_SECRET?.trim(), userId = env.SCRATCHBOX_MCP_USER_ID?.trim(), workspaceId = env.SCRATCHBOX_MCP_WORKSPACE_ID?.trim();
     if (!secret || !userId || !workspaceId) return undefined;
     const canvasId = env.SCRATCHBOX_MCP_CANVAS_ID?.trim();
     return { endpoint: env.SCRATCHBOX_MCP_ENDPOINT?.trim() || 'https://scratchbox.ai/api/mcp/canvas', secret, userId, workspaceId, ...(canvasId ? { canvasId } : {}) };
+}
+
+/**
+ * The connection to use, read when a run starts (never cached across runs: the workspace can change): the connected
+ * workspace when there is one, else the development connection from SCRATCHBOX_MCP_*, else none.
+ */
+export function studioMcpConfig(env: Record<string, string | undefined> = process.env, account: DesktopAccount = getScratchboxAccount()): StudioMcpConfig | undefined {
+    const connected = account.studioConfig();
+    if (connected) {
+        const canvasId = env.SCRATCHBOX_MCP_CANVAS_ID?.trim();
+        return { ...connected, ...(canvasId ? { canvasId } : {}) };
+    }
+    return studioMcpConfigFromEnv(env);
 }
 
 export class StudioMcpError extends Error {
@@ -38,7 +67,24 @@ export class StudioMcpError extends Error {
     }
 }
 
-type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer>; headers: { get(name: string): string | null } }>;
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/** The request headers that say who is calling: the account's bearer token, or (development only) the internal secret. */
+export async function studioMcpHeaders(config: StudioMcpConfig): Promise<Record<string, string>> {
+    if (config.getAccessToken) {
+        // A bearer token goes only to scratchbox.ai's MCP route over HTTPS (plain HTTP on loopback: a local stand-in).
+        const endpoint = new URL(config.endpoint);
+        const transportOk = endpoint.protocol === 'https:' || (endpoint.protocol === 'http:' && LOOPBACK.has(endpoint.hostname));
+        if (!transportOk || endpoint.username || endpoint.password || endpoint.pathname !== '/api/mcp/canvas' || endpoint.search || endpoint.hash) {
+            throw new StudioMcpError('Invalid Scratchbox MCP endpoint.');
+        }
+        return { Authorization: `Bearer ${await config.getAccessToken()}`, 'x-scratchbox-workspace-id': config.workspaceId };
+    }
+    if (config.secret && config.userId) return { 'x-internal-secret': config.secret, 'x-internal-user-id': config.userId, 'x-scratchbox-workspace-id': config.workspaceId };
+    throw new StudioMcpError('Not connected to scratchbox.ai: connect a workspace in Settings > Account.');
+}
+
+type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal; redirect?: 'error' }) => Promise<{ ok: boolean; status: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer>; headers: { get(name: string): string | null } }>;
 
 export interface StudioCallOptions {
     fetch?: FetchLike;
@@ -47,38 +93,57 @@ export interface StudioCallOptions {
 
 const fetchOf = (o: StudioCallOptions): FetchLike => o.fetch ?? (globalThis.fetch as unknown as FetchLike);
 
+type McpResult = { [key: string]: unknown; content?: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown>; isError?: boolean };
+
 /** The JSON-RPC result of the last `data:` event of a Streamable HTTP answer (or a plain JSON body). */
-export function parseMcpAnswer(body: string): { result?: { content?: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown>; isError?: boolean }; error?: { code: number; message: string } } {
+export function parseMcpAnswer(body: string): { result?: McpResult; error?: { code: number; message: string } } {
     const events = body.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).filter(Boolean);
     const json = events.length ? events[events.length - 1] : body.trim();
     try {
         return JSON.parse(json);
     } catch {
-        throw new StudioMcpError(`Scratchbox Studio answered with something that is not JSON-RPC: ${body.slice(0, 200)}`);
+        throw new StudioMcpError('Scratchbox Studio returned an invalid JSON-RPC response.');
     }
+}
+
+/**
+ * One JSON-RPC request (`tools/list` to discover the server's tools, `tools/call` to run one). Never retried: a failed
+ * transport may already have queued a paid or mutating operation; callers keep and poll the operation ids tools return.
+ */
+export async function callStudioRequest(config: StudioMcpConfig, method: 'tools/list' | 'tools/call', params: Record<string, unknown>, options: StudioCallOptions = {}, retried = false): Promise<McpResult> {
+    const res = await fetchOf(options)(config.endpoint, {
+        method: 'POST',
+        redirect: 'error',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            'MCP-Protocol-Version': '2025-03-26',
+            ...(await studioMcpHeaders(config))
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+        ...(options.signal ? { signal: options.signal } : {})
+    });
+    const body = await res.text();
+    const what = method === 'tools/call' ? String(params.name) : method;
+    if (res.status === 401 && config.getAccessToken) {
+        // A 401 means the call did not run, so one retry with a renewed token cannot repeat a paid or mutating change.
+        if (!retried && (await config.onCredentialRejected?.())) return callStudioRequest(config, method, params, options, true);
+        throw new StudioMcpError('scratchbox.ai no longer accepts this connection (revoked or expired): connect again in Settings > Account.', { status: 401, tool: what });
+    }
+    if (!res.ok) throw new StudioMcpError(`Scratchbox Studio ${what} failed (HTTP ${res.status}); it was not retried.`, { status: res.status, tool: what });
+    const answer = parseMcpAnswer(body);
+    if (answer.error) throw new StudioMcpError(`Scratchbox Studio ${what} failed: ${String(answer.error.message).slice(0, 300)}`, { code: answer.error.code, tool: what });
+    if (!answer.result) throw new StudioMcpError(`Scratchbox Studio ${what} returned no result.`, { tool: what });
+    return answer.result;
 }
 
 /** Calls one Studio MCP tool and returns its structured content; throws StudioMcpError on an HTTP, JSON-RPC or tool error. */
 export async function callStudioTool(config: StudioMcpConfig, name: string, args: Record<string, unknown>, options: StudioCallOptions = {}): Promise<Record<string, unknown>> {
-    const res = await fetchOf(options)(config.endpoint, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json, text/event-stream',
-            'x-internal-secret': config.secret,
-            'x-internal-user-id': config.userId,
-            'x-scratchbox-workspace-id': config.workspaceId
-        },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
-        ...(options.signal ? { signal: options.signal } : {})
-    });
-    const body = await res.text();
-    if (!res.ok) throw new StudioMcpError(`Scratchbox Studio ${name} failed (HTTP ${res.status}): ${body.slice(0, 200)}`, { status: res.status, tool: name });
-    const answer = parseMcpAnswer(body);
-    if (answer.error) throw new StudioMcpError(`Scratchbox Studio ${name} failed: ${answer.error.message}`, { code: answer.error.code, tool: name });
-    const text = answer.result?.content?.map(c => c.text ?? '').join(' ').trim() ?? '';
-    if (answer.result?.isError) throw new StudioMcpError(`Scratchbox Studio ${name} failed: ${text.slice(0, 300)}`, { tool: name });
-    return answer.result?.structuredContent ?? (text ? safeJson(text) : {});
+    const result = await callStudioRequest(config, 'tools/call', { name, arguments: args }, options);
+    const text = result.content?.map(c => c.text ?? '').join(' ').trim() ?? '';
+    // The tool's own message (e.g. an unknown preset) is kept: the agent needs it to correct the call.
+    if (result.isError) throw new StudioMcpError(`Scratchbox Studio ${name} failed: ${text.slice(0, 300)}`, { tool: name });
+    return result.structuredContent ?? (text ? safeJson(text) : {});
 }
 
 function safeJson(text: string): Record<string, unknown> {
@@ -150,7 +215,8 @@ export async function generateStyleDnaImage(config: StudioMcpConfig, request: St
     if (op.status !== 'completed') throw new StudioMcpError(`Scratchbox Studio image job ${operationId} ended ${String(op.status)}${op.error ? `: ${JSON.stringify(op.error).slice(0, 200)}` : ''}.`, { operationId, status: op.status });
     const rel = (op.result as { url?: string } | undefined)?.url;
     if (!rel) throw new StudioMcpError(`Scratchbox Studio image job ${operationId} completed without an image URL.`, { operationId });
-    const url = new URL(rel, config.endpoint).toString();
+    // Connected: a signed URL through the account. Development secret: the storage link as served.
+    const url = config.resolveMedia ? await config.resolveMedia(rel) : new URL(rel, config.endpoint).toString();
     const img = await fetchOf(options)(url, { method: 'GET', headers: {}, ...(options.signal ? { signal: options.signal } : {}) });
     if (!img.ok) throw new StudioMcpError(`Fetching the Style DNA image failed (HTTP ${img.status}).`, { url });
     return { data: Buffer.from(await img.arrayBuffer()), mimeType: img.headers.get('content-type')?.split(';')[0] || 'image/jpeg', url, operationId, effectivePresets };
