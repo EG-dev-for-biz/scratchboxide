@@ -1,7 +1,7 @@
 # Process: The chat agent on Gemini, Claude or OpenAI, picked per chat
 
 > **Recorded:** 2026-11-11
-> **Status:** Partly verified. Gemini path verified live through the new provider-neutral loop; Claude and OpenAI verified on recorded/constructed streams only. Live Claude/OpenAI runs are blocked: the keys in the secrets files are revoked.
+> **Status:** Verified on all three providers (object build live on Gemini, Claude Opus 5.5 and GPT-6 Astra; 3D Building starter live, see §2). Two bugs found live and fixed in the PR (§3).
 > **Tags:** `operate-scratchbox` `chat-agent` `providers` `claude` `openai` `model-picker`
 > **Target Domain:** Agent chat (model provider layer, composer, Settings > Models & AI)
 
@@ -26,12 +26,17 @@
 
 ---
 
+* **Claude Opus 5.5 object build (after valid keys were saved in Settings)** — same stool prompt → task list, `load_tools`, `load_skill`, `read_sb_script_guide`, `execute_3d_python_script` (2.5 s) → stool in the viewport → `audit_3d_scene_viewport`, `workspace_view_image` ×4 (the renders shown to Claude inside tool_result blocks) → a second `execute_3d_python_script` → verification passed; main's quality gate then sent its review back (round 1 5.7/10, round 2 6.3/10) and Claude kept working on the feedback in the same turn; stopped after round 3 (the gate's own loop, not the provider). Summarized thinking streamed throughout. Screenshots: `claude-object-build.jpg`, `claude-object-build-tools.jpg`.
+* **Claude Sonnet 5.5, 3D Building starter** — "Make a 3D building" → Claude asked which building (suggesting the Flatiron) → reply "The Flatiron Building in New York, as a single building." → `load_skill`, `google_3d_tiles_get_clay` (949 s, stage progress cards throughout) → result back to Claude, which reported honestly that pipeline K's remesh stage hit its 15-minute limit (straightened clay scan shown, no textured rebuild) → the quality gate failed it (2.3/10) → Claude started a remesh retry on its own; stopped by me because the machine's load was over 100 (house rule; the load came from other sessions' work). Screenshot: `claude-3d-building.jpg`. The remesh timeout is pipeline K's (follow-up), not the provider's.
+* **GPT-6 Astra, 3D Building starter (question step)** — "Make a 3D building" on GPT-6 Astra: the server stream carried reasoning summaries, the reply "Try the **Flatiron Building in New York**. Which building or address would you like?" and `done` (read from the network response; the background tab it ran in did not render it). The build itself was not run: load over 100 and the pane in use.
+* **GPT-6 Astra object build** — same prompt → task list, `load_skill` ×3, `load_tools`, `read_sb_script_guide`, `execute_3d_python_script` (4.9 s), `audit_3d_scene_viewport` (4.7 s) — 7 of 7 tools completed, verification passed, independent review round 1 8.7/10 passed; footnote "Answered by gpt-6-astra · OpenAI API key". Screenshot: `openai-object-build.jpg`.
+
 ## 3. What Broke / Didn't Work
 
-* **Claude and OpenAI live runs** — both keys stored in `~/.scratchbox/secrets.json`, the repo's `secrets.json` and `.env` (one value each) are rejected by the providers themselves:
-  - Anthropic: `401 {"type":"authentication_error","message":"invalid x-api-key"}` (also with the standard `x-api-key` header from curl, so not the adapter).
-  - OpenAI: `401 invalid_api_key` for the `sk-svcac…` key.
-  - Needed: valid keys in Settings > Models & AI (or replaced in the secrets file), then the object build and the 3D Building starter re-run on each provider.
+* **Stored keys revoked** — the Anthropic and OpenAI keys in `~/.scratchbox/secrets.json`, the repo `secrets.json` and `.env` are rejected (`401 invalid x-api-key`; `401 invalid_api_key`, also from curl). The user saved valid keys in Settings > Models & AI; those come first.
+* **Tools asked Google for the chat's Claude model (fixed)** — on the Claude run `audit_3d_scene_viewport` failed with `Publisher model … claude-opus-5-5 was not found`: tools that make their own Google calls read `ctx.request.model`. Fix: on a non-Gemini chat tools get the request without the chat's model (`StreamingEngine.executeToolCall`); confirmed live: the audit ran on the GPT run. Test added.
+* **OpenAI's second call failed (fixed)** — `400 Unknown parameter: 'input[2].parsed_arguments'`: the openai SDK's stream helper adds `parsed_arguments` / `parsed` to the final response's items, which were replayed verbatim. Fix: `replayableOutput` drops them; the fixture test now compares the replayed items exactly; confirmed live (the 7-tool GPT run).
+* **`workspace_view_image` refused the review renders** — they sit outside the workspace and the tool's path guard refuses them (not provider-related; seen on the Claude run).
 
 ---
 
