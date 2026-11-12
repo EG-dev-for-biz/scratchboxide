@@ -1,5 +1,13 @@
 # Vehicles removed from every staged build (Federation Square, Melbourne)
 
+> **Update 2026-11-12 (off the main thread):** the stage runs in a worker thread (`vehicle-removal-run.ts`,
+> `removeVehiclesOffThread`). Only its vision calls stay on the server's main thread: each crop or batch is posted back
+> and judged there. On the Flatiron district (run `ee634ff6`) the stage had held the main thread 498 s in 8 blocks, the
+> longest 349 s (223 crop renders before the first vision call, then 175 regions of surface infill). 5 of its 11 vision
+> calls timed out, and the chat's own request failed. A fresh, uncached build of the same request (run `dd6d8f7e`) blocked
+> the main thread twice in its 469 s: 1.4 s at the start (shared with `vector`) and 0.8 s. Same input and model answers:
+> the GLBs are byte-identical and the report is the same except `ms`. `SCRATCHBOX_VEHICLES_WORKER=0` runs it inline.
+
 > **Update 2026-11-03 (`vehicle-removal/5`):** steps 3 and 4 below are now the surface infill's
 > (`surface-infill.ts`, `docs/processes/surface_infill_service.md`): the street under a region is its ring's levels (a
 > kerb kept as a step) on local quadrics instead of an inverse-distance surface, and its texels come from the infill's
