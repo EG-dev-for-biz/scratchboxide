@@ -170,6 +170,9 @@ struct Params {
     double slenderTexelM{0.08};        // ... at this texel at finest (coarsened until every panel fits)
     int patchRows{0};                  // more reserved rows: any large flat face of a ledge or roof block takes its own patch of the scan's photo there
     double patchTexelM{0.1};           // ... at this texel
+    int roofRows{0};                   // more reserved rows: each tier's roof takes one top-down patch of the scan's photo there (not one colour a piece)
+    double roofTexelM{0.1};            // ... at this texel at finest (coarsened until every roof fits)
+    double roofGridM{4};               // ... in patches of this square cell (only the cells a cap covers are photographed)
     double patchMinArea{4};            // ... faces of at least this area (m^2)                  // the colour atlas written as JPEG (a large atlas at a fraction of the bytes)
     double reliefM{0};                 // when above 0: relief maps on the walls, roofs and slender top rebuild, as blocks, what stands at least this far off the shell (all procedural; the ledge profiles are left out)
     double reliefCellM{0.3};           // ... their cell
@@ -252,6 +255,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "reliefM") P.reliefM = v; else if (name == "reliefCellM") P.reliefCellM = v; else if (name == "reliefDensity") P.reliefDensity = v; else if (name == "reliefMinArea") P.reliefMinArea = v; else if (name == "reliefMaxArea") P.reliefMaxArea = v; else if (name == "surfaceFit") P.surfaceFit = static_cast<int>(v);
             else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v; else if (name == "scanDetailStepM") P.scanDetailStepM = v;
             else if (name == "patchRows") P.patchRows = static_cast<int>(v); else if (name == "patchTexelM") P.patchTexelM = v; else if (name == "patchMinArea") P.patchMinArea = v;
+            else if (name == "roofRows") P.roofRows = static_cast<int>(v); else if (name == "roofTexelM") P.roofTexelM = v; else if (name == "roofGridM") P.roofGridM = v;
             else if (name == "slenderTex") P.slenderTex = static_cast<int>(v); else if (name == "slenderRows") P.slenderRows = static_cast<int>(v); else if (name == "slenderTexelM") P.slenderTexelM = v;
             else if (name == "orthoBlend") P.orthoBlend = v; else if (name == "atlasJpeg") P.atlasJpeg = static_cast<int>(v);
             else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
@@ -489,6 +493,8 @@ struct Emitter {
     // atlas texels and divided by the atlas's final size when it is known (normaliseUvs).
     FaceTex* tex{nullptr};
     P3 texP0, texD;
+    bool texPlan{false};             // `tex` is a top-down patch: u along +x from texP0.x, v along +z from texP0.z
+
     double groundY{0};
     int texOffset{0}, atlasW{4096}, paletteY0{0};
     static constexpr int kBlock = 16;                // a palette block's side (texels): its colour survives four mip levels (distant views)
@@ -508,6 +514,11 @@ struct Emitter {
     }
     int paletteRowsTexels() const { const int perRow = atlasW / kBlock; return static_cast<int>((palette.size() + perRow - 1) / perRow) * kBlock; }
     void atlasUv(Prim& p, const P3& q) const {
+        if (texPlan) {
+            p.uv.push_back(static_cast<float>(tex->ax + (q.x - texP0.x) / tex->texel));
+            p.uv.push_back(static_cast<float>(tex->ay + (q.z - texP0.z) / tex->texel));
+            return;
+        }
         const double a = sp::dot(q - texP0, texD), h = q.y - groundY;
         p.uv.push_back(static_cast<float>(tex->ax + a / tex->texel));
         p.uv.push_back(static_cast<float>(tex->ay + (tex->h1 - h) / tex->texel));
@@ -565,7 +576,8 @@ struct Emitter {
 // =============================================================================================
 
 struct Report {
-    size_t tiers{0}, wallFaces{0}, facesWithWindows{0}, wallCells{0}, roofCells{0};
+    size_t tiers{0}, wallFaces{0}, facesWithWindows{0}, wallCells{0}, roofCells{0}, roofPatches{0}, roofTexels{0};
+    double roofTexelM{0};
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
@@ -1485,7 +1497,8 @@ inline Result build(Spec S) {
     E.atlasW = S.P.detailAtlas;
     const int slenderY0 = facesUsedH, slenderRows = S.P.slenderTex && rep.atlasW ? ((S.P.slenderRows + 3) / 4) * 4 : 0;
     const int patchY0 = slenderY0 + slenderRows, patchRows = S.P.patchRows > 0 && rep.atlasW ? ((S.P.patchRows + 3) / 4) * 4 : 0;
-    E.paletteY0 = facesUsedH + slenderRows + patchRows;
+    const int roofY0 = patchY0 + patchRows, roofRows = S.P.roofRows > 0 && rep.atlasW ? ((S.P.roofRows + 3) / 4) * 4 : 0;
+    E.paletteY0 = facesUsedH + slenderRows + patchRows + roofRows;
     // a large flat vertical face (bottom a0 -> a1, top c1, c0) with its own patch of the scan's photo in the reserved rows
     // (shelf-packed as they come; when the rows are full, or the face is small, its one colour as before)
     int patchX = 0, patchY = patchY0, patchShelf = 0;
@@ -1891,7 +1904,11 @@ inline Result build(Spec S) {
         rep.profileMedianOutM = med(outs); rep.profileMedianParapetM = med(paras);
     }
 
-    // --- roofs: each tier's cap, split until every edge is at most ~2 cell sizes, each piece its own colour
+    // --- roofs: each tier's cap, split until every edge is at most ~2 cell sizes, each piece its own colour. With roofRows,
+    // the caps' pixels are the scan's photo seen from above: the plan is tiled into roofGridM cells, every cell a cap
+    // covers takes its own patch in the reserved rows (only the area the caps cover, not their boxes: a cap's middle lies
+    // under the tier above it), and each piece is clipped to the cells it crosses, so every part samples its own cell.
+    std::vector<std::vector<std::array<P3, 3>>> capTris(tiers.size());
     for (size_t ti = 0; ti < tiers.size(); ++ti) {
         const auto& t = *tiers[ti];
         std::vector<cdt::P2> pts2;
@@ -1923,14 +1940,107 @@ inline Result build(Spec S) {
         if (!tris) tris = cdt::triangulatePolygon(pts2, loops);
         if (!tris) { rep.notes.push_back("tier " + std::to_string(ti) + ": its roof outline crosses itself; no cap"); continue; }
         const double y = S.groundY + t.topY;
-        std::vector<std::array<P3, 3>> todo;
         for (const auto& tr : *tris) {
             std::array<P3, 3> T;
             for (int k = 0; k < 3; ++k) T[k] = {pts2[tr[k]][0], y, pts2[tr[k]][1]};
             // counter-clockwise seen from above (+y)
             if (sp::cross(T[1] - T[0], T[2] - T[0]).y < 0) std::swap(T[1], T[2]);
-            todo.push_back(T);
+            capTris[ti].push_back(T);
         }
+    }
+    // a convex polygon in plan (x, z) clipped to an axis-aligned square (Sutherland-Hodgman); empty when they do not overlap
+    auto clipToCell = [](const std::vector<P3>& poly, double x0, double z0, double x1, double z1) {
+        std::vector<P3> out = poly;
+        auto edge = [&](auto inside, auto cross) {
+            std::vector<P3> in; in.swap(out);
+            for (size_t i = 0; i < in.size(); ++i) {
+                const P3& a = in[i]; const P3& b = in[(i + 1) % in.size()];
+                const bool ia = inside(a), ib = inside(b);
+                if (ia) out.push_back(a);
+                if (ia != ib) out.push_back(cross(a, b));
+            }
+        };
+        auto lerpX = [](const P3& a, const P3& b, double x) { const double t = (x - a.x) / (b.x - a.x); return P3{x, a.y, a.z + (b.z - a.z) * t}; };
+        auto lerpZ = [](const P3& a, const P3& b, double z) { const double t = (z - a.z) / (b.z - a.z); return P3{a.x + (b.x - a.x) * t, a.y, z}; };
+        edge([&](const P3& q) { return q.x >= x0; }, [&](const P3& a, const P3& b) { return lerpX(a, b, x0); });
+        if (!out.empty()) edge([&](const P3& q) { return q.x <= x1; }, [&](const P3& a, const P3& b) { return lerpX(a, b, x1); });
+        if (!out.empty()) edge([&](const P3& q) { return q.z >= z0; }, [&](const P3& a, const P3& b) { return lerpZ(a, b, z0); });
+        if (!out.empty()) edge([&](const P3& q) { return q.z <= z1; }, [&](const P3& a, const P3& b) { return lerpZ(a, b, z1); });
+        double area = 0;
+        for (size_t i = 1; i + 1 < out.size(); ++i) area += std::abs(sp::cross(out[i] - out[0], out[i + 1] - out[0]).y) * 0.5;
+        if (area < 1e-6) out.clear();
+        return out;
+    };
+    struct RoofCell { int ax{0}, ay{0}; double x0{0}, z0{0}; FaceTex* tex{nullptr}; };
+    std::vector<std::map<std::pair<int64_t, int64_t>, RoofCell>> roofCells(tiers.size());
+    const double G = std::max(1.0, S.P.roofGridM);
+    double roofTexel = S.P.roofTexelM;
+    // a cell wholly under a higher tier (its corners and centre inside that tier's outline) is never seen: no patch
+    auto hiddenCell = [&](size_t ti, int64_t ix, int64_t iz) {
+        for (size_t up2 = ti + 1; up2 < tiers.size(); ++up2) {
+            if (!(tiers[up2]->topY > tiers[ti]->topY)) continue;
+            bool all = true;
+            for (const auto& [fx, fz] : std::initializer_list<std::pair<double, double>>{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0.5, 0.5}}) {
+                const P2 q = F.toUV((ix + fx) * G, (iz + fz) * G);
+                bool in = false;
+                for (const auto& l : tiers[up2]->loopsUV) if (detail::inRingXZ(q.u, q.v, l)) in = !in;
+                if (!in) { all = false; break; }
+            }
+            if (all) return true;
+        }
+        return false;
+    };
+    if (roofRows && ph.ok) {
+        for (size_t ti = 0; ti < tiers.size(); ++ti) for (const auto& T : capTris[ti]) {
+            const double tx0 = std::min({T[0].x, T[1].x, T[2].x}), tx1 = std::max({T[0].x, T[1].x, T[2].x}), tz0 = std::min({T[0].z, T[1].z, T[2].z}), tz1 = std::max({T[0].z, T[1].z, T[2].z});
+            for (int64_t ix = static_cast<int64_t>(std::floor(tx0 / G)); ix <= static_cast<int64_t>(std::floor(tx1 / G)); ++ix)
+                for (int64_t iz = static_cast<int64_t>(std::floor(tz0 / G)); iz <= static_cast<int64_t>(std::floor(tz1 / G)); ++iz)
+                    if (!roofCells[ti].count({ix, iz}) && !hiddenCell(ti, ix, iz) && !clipToCell({T[0], T[1], T[2]}, ix * G, iz * G, (ix + 1) * G, (iz + 1) * G).empty()) roofCells[ti][{ix, iz}] = RoofCell{0, 0, ix * G, iz * G, nullptr};
+        }
+        // the finest texel (from roofTexelM, 10% coarser a step) at which every cell's square shelf-packs into the rows
+        size_t cells = 0;
+        for (const auto& m : roofCells) cells += m.size();
+        bool fits = false;
+        for (int step = 0; step < 40 && cells; ++step, roofTexel *= 1.1) {
+            const int n = static_cast<int>(std::ceil(G / roofTexel)) + 1, perRow = E.atlasW / (n + 2);
+            if (perRow > 0 && static_cast<size_t>((cells + perRow - 1) / perRow) * (n + 2) <= static_cast<size_t>(roofRows)) { fits = true; break; }
+        }
+        if (fits) {
+            const int n = static_cast<int>(std::ceil(G / roofTexel)) + 1, perRow = E.atlasW / (n + 2);
+            size_t k = 0;
+            for (size_t ti = 0; ti < tiers.size(); ++ti) {
+                const double y = S.groundY + tiers[ti]->topY;
+                for (auto& [key, cell] : roofCells[ti]) {
+                    cell.ax = static_cast<int>(k % perRow) * (n + 2) + 1; cell.ay = roofY0 + static_cast<int>(k / perRow) * (n + 2) + 1; ++k;
+                    slenderTex.emplace_back();
+                    FaceTex& T = slenderTex.back();
+                    T.ax = cell.ax; T.ay = cell.ay; T.w = n; T.h = n; T.texel = roofTexel;
+                    T.M.assign(static_cast<size_t>(n) * n * 3, -1.0f);
+                    std::vector<double> mr, mg, mb;
+                    for (int j = 0; j < n; ++j) for (int i = 0; i < n; ++i) {
+                        Rgb pc;
+                        if (!ph.sample(P3{cell.x0 + (i + 0.5) * roofTexel, y, cell.z0 + (j + 0.5) * roofTexel}, up, S.P.sampleRadiusM, pc)) continue;
+                        const size_t o = (static_cast<size_t>(j) * n + i) * 3;
+                        T.M[o] = static_cast<float>(pc.r); T.M[o + 1] = static_cast<float>(pc.g); T.M[o + 2] = static_cast<float>(pc.b);
+                        ++rep.roofTexels;
+                        mr.push_back(pc.r); mg.push_back(pc.g); mb.push_back(pc.b);
+                    }
+                    // a texel no photo reaches: the cell's median, else the cap's first class colour
+                    Rgb fill = classColour(0);
+                    if (!mr.empty()) { auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }; fill = {med(mr), med(mg), med(mb)}; }
+                    for (size_t o = 0; o < T.M.size(); o += 3) if (T.M[o] < 0) { T.M[o] = static_cast<float>(fill.r); T.M[o + 1] = static_cast<float>(fill.g); T.M[o + 2] = static_cast<float>(fill.b); }
+                    T.ok = true;
+                    cell.tex = &T;
+                }
+            }
+            rep.roofPatches = cells; rep.roofTexelM = roofTexel;
+        } else if (cells) {
+            for (auto& m : roofCells) m.clear();
+            rep.notes.push_back("the roofs' " + std::to_string(cells) + " cells did not fit their reserved atlas rows at any texel up to 40 steps coarser: their pieces keep one colour each");
+        }
+    }
+    for (size_t ti = 0; ti < tiers.size(); ++ti) {
+        std::vector<std::array<P3, 3>> todo = capTris[ti];
         const double maxE = 2 * S.P.cellM;
         while (!todo.empty()) {
             auto T = todo.back(); todo.pop_back();
@@ -1944,7 +2054,7 @@ inline Result build(Spec S) {
                 todo.push_back({a, m, c}); todo.push_back({m, b, c});
                 continue;
             }
-            // the colour: the photo at the piece's centre and toward its corners
+            // the colour: the photo at the piece's centre and toward its corners (its material class)
             std::vector<double> cr, cg, cb;
             const P3 cc = (T[0] + T[1] + T[2]) * (1.0 / 3);
             for (const P3& q : {cc, (cc + T[0]) * 0.5, (cc + T[1]) * 0.5, (cc + T[2]) * 0.5}) { Rgb c; if (ph.sample(q, up, S.P.sampleRadiusM, c)) { cr.push_back(c.r); cg.push_back(c.g); cb.push_back(c.b); } }
@@ -1952,8 +2062,20 @@ inline Result build(Spec S) {
             if (!cr.empty()) { auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }; c = {med(cr), med(cg), med(cb)}; ++rep.colouredElements; } else ++rep.uncolouredElements;
             const int m = E.classOf(c);
             ++rep.classUse[m];
-            E.tri(massing, m, T[0], T[1], T[2], up, c, P3{1, 0, 0}, P3{0, 0, 1});
             ++rep.roofCells;
+            if (roofCells[ti].empty()) { E.tri(massing, m, T[0], T[1], T[2], up, c, P3{1, 0, 0}, P3{0, 0, 1}); continue; }
+            // its parts in each cell it crosses, each drawn from that cell's patch
+            const double tx0 = std::min({T[0].x, T[1].x, T[2].x}), tx1 = std::max({T[0].x, T[1].x, T[2].x}), tz0 = std::min({T[0].z, T[1].z, T[2].z}), tz1 = std::max({T[0].z, T[1].z, T[2].z});
+            for (int64_t ix = static_cast<int64_t>(std::floor(tx0 / G)); ix <= static_cast<int64_t>(std::floor(tx1 / G)); ++ix)
+                for (int64_t iz = static_cast<int64_t>(std::floor(tz0 / G)); iz <= static_cast<int64_t>(std::floor(tz1 / G)); ++iz) {
+                    auto it = roofCells[ti].find({ix, iz});
+                    const auto part = clipToCell({T[0], T[1], T[2]}, ix * G, iz * G, (ix + 1) * G, (iz + 1) * G);
+                    if (part.empty()) continue;
+                    FaceTex* prev = E.tex; const P3 p0 = E.texP0; const bool plan = E.texPlan;
+                    if (it != roofCells[ti].end() && it->second.tex) { E.tex = it->second.tex; E.texP0 = P3{it->second.x0, 0, it->second.z0}; E.texPlan = true; }
+                    for (size_t q = 1; q + 1 < part.size(); ++q) E.tri(massing, m, part[0], part[q], part[q + 1], up, c, P3{1, 0, 0}, P3{0, 0, 1});
+                    E.tex = prev; E.texP0 = p0; E.texPlan = plan;
+                }
         }
     }
 
@@ -3121,7 +3243,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
 inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, size_t bytes) {
     std::ostringstream o;
     o << "{\"ok\":true,\"tiers\":" << r.tiers << ",\"wallFaces\":" << r.wallFaces << ",\"facesWithWindows\":" << r.facesWithWindows
-      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" << ",\"roofDetail\":{\"pieces\":" << r.roofDetailPieces << ",\"boxes\":" << r.roofDetailBoxes << ",\"areaM2\":" << detail::num(r.roofDetailAreaM2) << ",\"medianM\":" << detail::num(r.roofDetailMedianM) << "}" << ",\"scanDetail\":{\"thresholdM\":" << detail::num(S.P.scanDetailM) << ",\"pieces\":" << r.scanDetailPieces << ",\"triangles\":" << r.scanDetailTriangles << ",\"areaM2\":" << detail::num(r.scanDetailAreaM2) << "}" << ",\"relief\":{\"thresholdM\":" << detail::num(S.P.reliefM) << ",\"wallPieces\":" << r.reliefWallPieces << ",\"wallBoxes\":" << r.reliefWallBoxes << ",\"wallAreaM2\":" << detail::num(r.reliefWallAreaM2) << ",\"mastPieces\":" << r.reliefMastPieces << ",\"mastCells\":" << r.reliefMastCells << "}" 
+      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"roofPatches\":" << r.roofPatches << ",\"roofTexels\":" << r.roofTexels << ",\"roofTexelM\":" << detail::num(r.roofTexelM) << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" << ",\"roofDetail\":{\"pieces\":" << r.roofDetailPieces << ",\"boxes\":" << r.roofDetailBoxes << ",\"areaM2\":" << detail::num(r.roofDetailAreaM2) << ",\"medianM\":" << detail::num(r.roofDetailMedianM) << "}" << ",\"scanDetail\":{\"thresholdM\":" << detail::num(S.P.scanDetailM) << ",\"pieces\":" << r.scanDetailPieces << ",\"triangles\":" << r.scanDetailTriangles << ",\"areaM2\":" << detail::num(r.scanDetailAreaM2) << "}" << ",\"relief\":{\"thresholdM\":" << detail::num(S.P.reliefM) << ",\"wallPieces\":" << r.reliefWallPieces << ",\"wallBoxes\":" << r.reliefWallBoxes << ",\"wallAreaM2\":" << detail::num(r.reliefWallAreaM2) << ",\"mastPieces\":" << r.reliefMastPieces << ",\"mastCells\":" << r.reliefMastCells << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"

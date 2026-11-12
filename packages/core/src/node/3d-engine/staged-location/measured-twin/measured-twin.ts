@@ -253,7 +253,7 @@ export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; k
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
-    ok: true; tiers: number; wallFaces: number; facesWithWindows: number; wallCells: number; roofCells: number; capsCut: number;
+    ok: true; tiers: number; wallFaces: number; facesWithWindows: number; wallCells: number; roofCells: number; /** Tier roofs drawn from their own top-down patch of the scan's photo (roofRows), its texels and texel size. */ roofPatches?: number; roofTexels?: number; roofTexelM?: number; capsCut: number;
     detail: { faces: number; texels: number; atlas: [number, number]; texelM: number; paletteColours: number };
     profiles: { walls: number; lips: number; parapets: number; steps: number; medianOutM: number; medianParapetM: number };
     roofDetail: { pieces: number; boxes: number; areaM2: number; medianM: number };
@@ -318,7 +318,7 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
         const h = await hybridInputs(rec.orthosDir, path.join(opts.outDir, 'hybrid'), { groundY: Number.isFinite(groundY) ? groundY : 0, ...(opts.models ? { models: opts.models } : {}), ...(opts.store ? { store: opts.store } : {}), ...(opts.building ? { building: opts.building } : {}), ...(opts.streetView ? { streetView: opts.streetView } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(options.symmetry !== false && rec.textured ? { symmetryScan: rec.textured } : {}) });
         hybridReport = h.hybrid; inferReport = h.report;
         rec = { ...rec, planes: h.planes, windowFit: h.windowFit, photos: h.photos, classes: h.classes };
-        extra = ['param piers 1', 'param turnedBelowM 1.2', 'param selfFill 1', 'param slenderTex 1', 'param patchRows 1536', 'param orthoBlend 0.6', 'param detailAtlas 8192', 'param detailTexelM 0.07', 'param atlasJpeg 1', 'param scanDetailM 0.3', 'param scanDetailStepM 0.6', 'param scanDetailMinArea 2',
+        extra = ['param piers 1', 'param turnedBelowM 1.2', 'param selfFill 1', 'param slenderTex 1', 'param patchRows 1536', 'param roofRows 768', 'param roofTexelM 0.07', 'param orthoBlend 0.6', 'param detailAtlas 8192', 'param detailTexelM 0.07', 'param atlasJpeg 1', 'param scanDetailM 0.3', 'param scanDetailStepM 0.6', 'param scanDetailMinArea 2',
             ...h.base.map(b => `planebase ${b.id} ${b.pixel} ${b.topM} ${b.png}`), ...h.height.map(x => `planeheight ${x.id} ${x.depthM} ${x.png}`)];
     } else if (options.infer) {
         // the first pass: the K-free twin, writing each wall's own photo as an orthos folder

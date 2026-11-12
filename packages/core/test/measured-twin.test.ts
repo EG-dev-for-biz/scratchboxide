@@ -230,7 +230,7 @@ describe.skipIf(!fs.existsSync(RUN))('the hybrid twin of a real staged run (ESB)
         expect(h.array.windows).toBeGreaterThan(h.windowFit.windows);
         expect(fs.existsSync(path.join(outDir, 'hybrid', 'relief_orthos'))).toBe(true);
         const spec = fs.readFileSync(r.specFile, 'utf8').split('\n');
-        for (const l of ['param selfFill 1', 'param slenderTex 1', 'param orthoBlend 0.6', 'param scanDetailStepM 0.6', 'param atlasJpeg 1']) expect(spec).toContain(l);
+        for (const l of ['param selfFill 1', 'param slenderTex 1', 'param orthoBlend 0.6', 'param scanDetailStepM 0.6', 'param atlasJpeg 1', 'param roofRows 768']) expect(spec).toContain(l);
         expect(spec.some(l => l.startsWith('win '))).toBe(true);
         // no model: the window fit and arrays alone (with the reader and system, cold, 4,418 on the twin)
         expect(r.report.windows.placed).toBeGreaterThan(1000);
@@ -240,6 +240,10 @@ describe.skipIf(!fs.existsSync(RUN))('the hybrid twin of a real staged run (ESB)
         // the mast's panels carry the scan's photo, not one colour each
         expect(r.report.piers!.slenderTexels).toBeGreaterThan(100_000);
         expect(r.report.detail.faces).toBeGreaterThan(100);
+        // the roofs drawn from the scan's photo seen from above, in 4 m cells only where a cap is seen, near the walls' texel
+        expect(r.report.roofPatches).toBeGreaterThan(500);
+        expect(r.report.roofTexels).toBeGreaterThan(1_000_000);
+        expect(r.report.roofTexelM).toBeLessThan(0.1);
         // the scan kept only where it steps out (ornament), the lips still drawn
         expect(r.report.scanDetail.pieces).toBeGreaterThan(0);
         expect(r.report.profiles.lips).toBeGreaterThan(0);
