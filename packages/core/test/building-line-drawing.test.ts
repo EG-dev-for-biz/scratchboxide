@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { renderBuildingLineDrawings, CARDINAL_VIEWS, LINE_DRAWING_PARAMS } from '../src/node/3d-engine/staged-location/building-line-drawing';
+import { renderBuildingLineDrawings, renderPlaneLines, CARDINAL_VIEWS, LINE_DRAWING_PARAMS } from '../src/node/3d-engine/staged-location/building-line-drawing';
 import { runBuildingLineDrawing } from '../src/node/gemini/tools/location-evidence/building-line-drawing';
 
 /** A closed axis-aligned box as a triangle soup, its faces wound outward. */
@@ -57,6 +57,25 @@ describe('building line drawing: silhouette and crease, hidden lines removed', (
             const w = v.width * v.pixelM;
             expect(Math.min(Math.abs(w - 20), Math.abs(w - 10))).toBeLessThan(0.5);
         }
+    });
+
+    it('draws a plane\'s own lines in its ortho frame: its outline and the setback above it', () => {
+        // a 20 m podium 5 m tall with a 10 m tower on it set back 5 m; the podium's south face (z = 20, facing +z) as an
+        // ortho at 0.1 m: s along +x from x = 0, t up from the ground, its top at 30 m so the tower's foot shows behind it
+        const soup = Float32Array.from([...box(0, 0, 0, 20, 5, 20), ...box(5, 5, 5, 15, 30, 15)]);
+        const f = { centroid: [10, 15, 20] as [number, number, number], normal: [0, 0, 1] as [number, number, number], axisS: [1, 0, 0] as [number, number, number], axisT: [0, 1, 0] as [number, number, number], orthoSMin: -10, orthoTMax: 15, pixel: 0.1, width: 200, height: 300 };
+        const dr = renderPlaneLines(soup, f, 1)!;
+        expect([dr.width, dr.height]).toEqual([200, 300]);
+        const at = (x: number, y: number) => dr.rgb[(y * dr.width + x) * 3];
+        // the podium face's top edge at t = 5 m: row (30 - 5) / 0.1 = 250, drawn across it
+        let topRow = 0; for (let x = 10; x < 190; x++) if (at(x, 250) < 200 || at(x, 249) < 200) topRow++;
+        expect(topRow).toBeGreaterThan(150);
+        // the tower stands 15 m behind the face, past the band: it is not drawn on the podium face's sheet
+        let tower = 0; for (let y = 10; y < 240; y++) if (at(50, y) < 200 || at(51, y) < 200) tower++;
+        expect(tower).toBe(0);
+        // the face's sides (x = 0 and 20 m, columns 0 and 199) run up to its top
+        let side = 0; for (let y = 252; y < 298; y++) if (at(0, y) < 200 || at(1, y) < 200) side++;
+        expect(side).toBeGreaterThan(40);
     });
 
     it('draws a setback as a crease in elevation and as a ring in plan', () => {

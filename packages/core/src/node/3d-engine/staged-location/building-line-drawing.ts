@@ -249,17 +249,22 @@ function photoEdges(photo: TileTriangles, view: LineDrawingView, W: number, H: n
     return { edge, covered, edgePixels, threshold: Math.round(threshold * 1e4) / 1e4 };
 }
 
-function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineDrawingParams, t0: number, photo?: TileTriangles): { png: { width: number; height: number; rgb: Uint8Array }; stats: LineDrawingReport['views'][number] } {
+/** A view's image fixed in advance (a plane's ortho frame): its top-left in the view's axes, its pixel and size. */
+interface FixedFrame { uMin: number; vMax: number; pixelM: number; W: number; H: number }
+
+function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineDrawingParams, t0: number, photo?: TileTriangles, fixed?: FixedFrame, caption = true): { png: { width: number; height: number; rgb: Uint8Array }; stats: LineDrawingReport['views'][number] } {
     const { forward, right, up } = view;
     const u = (i: number) => m.P[3 * i] * right[0] + m.P[3 * i + 1] * right[1] + m.P[3 * i + 2] * right[2];
     const v = (i: number) => m.P[3 * i] * up[0] + m.P[3 * i + 1] * up[1] + m.P[3 * i + 2] * up[2];
     const d = (i: number) => m.P[3 * i] * forward[0] + m.P[3 * i + 1] * forward[1] + m.P[3 * i + 2] * forward[2];
-    let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
-    for (let i = 0; i < m.P.length / 3; i++) { const uu = u(i), vv = v(i); if (uu < uMin) uMin = uu; if (uu > uMax) uMax = uu; if (vv < vMin) vMin = vv; if (vv > vMax) vMax = vv; }
-    let pixelM = P.pixelM;
-    const long = Math.max(uMax - uMin, vMax - vMin);
-    if (long / pixelM > P.maxDimPx) pixelM = long / P.maxDimPx;
-    const W = Math.max(2, Math.ceil((uMax - uMin) / pixelM) + 2), H = Math.max(2, Math.ceil((vMax - vMin) / pixelM) + 2);
+    let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity, pixelM = P.pixelM, W: number, H: number;
+    if (fixed) ({ uMin, vMax, pixelM, W, H } = fixed);
+    else {
+        for (let i = 0; i < m.P.length / 3; i++) { const uu = u(i), vv = v(i); if (uu < uMin) uMin = uu; if (uu > uMax) uMax = uu; if (vv < vMin) vMin = vv; if (vv > vMax) vMax = vv; }
+        const long = Math.max(uMax - uMin, vMax - vMin);
+        if (long / pixelM > P.maxDimPx) pixelM = long / P.maxDimPx;
+        W = Math.max(2, Math.ceil((uMax - uMin) / pixelM) + 2); H = Math.max(2, Math.ceil((vMax - vMin) / pixelM) + 2);
+    }
     const col = (uu: number) => (uu - uMin) / pixelM, row = (vv: number) => (vMax - vv) / pixelM; // row 0 at the top (vMax)
 
     const depthBuf = new Float32Array(W * H).fill(Infinity);
@@ -309,8 +314,8 @@ function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineD
         }
         if (any) stats[e.kind].drawn++;
     }
-    const caption = `${view.name.toUpperCase()}  ${Math.round(pixelM * 1000) / 1000} M/PX  SILHOUETTE ${stats.silhouette.drawn}/${stats.silhouette.candidates}  CREASE ${stats.crease.drawn}/${stats.crease.candidates}  BOUNDARY ${stats.boundary.drawn}/${stats.boundary.candidates}${photoStats ? `  PHOTO EDGES ${photoStats.edgePixels} PX` : ''}`;
-    drawText(canvas.rgb, canvas.W, canvas.H, 4, 4, caption, 1, [0, 0, 0]);
+    const captionText = `${view.name.toUpperCase()}  ${Math.round(pixelM * 1000) / 1000} M/PX  SILHOUETTE ${stats.silhouette.drawn}/${stats.silhouette.candidates}  CREASE ${stats.crease.drawn}/${stats.crease.candidates}  BOUNDARY ${stats.boundary.drawn}/${stats.boundary.candidates}${photoStats ? `  PHOTO EDGES ${photoStats.edgePixels} PX` : ''}`;
+    if (caption) drawText(canvas.rgb, canvas.W, canvas.H, 4, 4, captionText, 1, [0, 0, 0]);
     return {
         png: { width: W, height: H, rgb: canvas.rgb },
         stats: { name: view.name, width: W, height: H, pixelM, originU: uMin, originV: vMax, right: view.right, up: view.up, forward: view.forward, frontFacingTriangles: frontFacing, ...stats, ...(photoStats ? { photo: photoStats } : {}), ms: Date.now() - t0 }
@@ -381,4 +386,56 @@ export function renderBuildingLineDrawings(positions: Float32Array | Float64Arra
         report: { version: LINE_DRAWING_VERSION, params: P, wallAzimuthDeg: azimuth, triangles: m.triCount, weldedVertices: m.P.length / 3, edges: edgeTotal, views: viewReports, ms: Date.now() - t0 },
         pngs
     };
+}
+
+/** A plane's ortho frame as facades.json and planes.json carry it: world = centroid + s axisS + t axisT; pixel x at s = orthoSMin + x pixel, y at t = orthoTMax - y pixel. */
+export interface PlaneOrthoFrame { centroid: Vec3; normal: Vec3; axisS: Vec3; axisT: Vec3; orthoSMin: number; orthoTMax: number; pixel: number; width: number; height: number }
+
+/** How near the plane a triangle must lie (its centroid, along the plane's normal) to be drawn on the plane's sheet. */
+export const PLANE_LINES_BAND_M = 2.5;
+/**
+ * A plane sheet keeps only edges within this angle (degrees) of the plane's axes: a change of structure on a wall or roof
+ * (a setback, a ledge, a pier's side) runs along them, where a fold between the scan's large triangles runs any way.
+ */
+export const PLANE_LINES_AXIS_DEG = 3;
+
+/**
+ * The scan's lines on one plane, in the plane's own ortho frame and pixel grid (scaled by `scale`), for a reader to lay
+ * beside the plane's photo: the silhouette and crease edges of the scan within PLANE_LINES_BAND_M of the plane and over
+ * its rectangle (1 m margin), seen straight on from in front of it, hidden lines removed, no caption; only edges within
+ * PLANE_LINES_AXIS_DEG of the plane's axes, and no open edges (the scan's tile cuts and holes are no structure).
+ * Geometry only: measured. Returns undefined when no triangle of the scan lies on the plane.
+ */
+export function renderPlaneLines(positions: Float32Array | Float64Array, f: PlaneOrthoFrame, scale = 1, P: LineDrawingParams = LINE_DRAWING_PARAMS): { width: number; height: number; rgb: Uint8Array; drawn: number } | undefined {
+    const n = f.normal, s = f.axisS, t = f.axisT, c = f.centroid;
+    const sMax = f.orthoSMin + f.width * f.pixel, tMin = f.orthoTMax - f.height * f.pixel;
+    // a point on the plane's sheet: within the band of the plane and over its rectangle (1 m margin)
+    const onSheet = (px: number, py: number, pz: number) => {
+        const x = px - c[0], y = py - c[1], z = pz - c[2];
+        if (Math.abs(x * n[0] + y * n[1] + z * n[2]) > PLANE_LINES_BAND_M) return false;
+        const ss = x * s[0] + y * s[1] + z * s[2], tt = x * t[0] + y * t[1] + z * t[2];
+        return ss >= f.orthoSMin - 1 && ss <= sMax + 1 && tt >= tMin - 1 && tt <= f.orthoTMax + 1;
+    };
+    // every triangle touching the sheet (a corner on it), so an edge on the sheet keeps both its triangles (the roof
+    // beside a wall's top edge stands mostly off the sheet, but makes that edge a silhouette, not an open edge)
+    const keep: number[] = [];
+    for (let k = 0; k + 8 < positions.length; k += 9) {
+        if (!onSheet(positions[k], positions[k + 1], positions[k + 2]) && !onSheet(positions[k + 3], positions[k + 4], positions[k + 5]) && !onSheet(positions[k + 6], positions[k + 7], positions[k + 8])) continue;
+        for (let q = 0; q < 9; q++) keep.push(positions[k + q]);
+    }
+    if (!keep.length) return undefined;
+    const m = weld(Float64Array.from(keep));
+    const view: LineDrawingView = { name: 'plane', forward: [-n[0], -n[1], -n[2]], right: s, up: t };
+    const sinAxis = Math.sin((PLANE_LINES_AXIS_DEG * Math.PI) / 180);
+    const edges = classifyEdges(m, view.forward, Math.cos((P.creaseDeg * Math.PI) / 180), P.minEdgeLenM).filter(e => {
+        if (e.kind === 'boundary') return false;
+        if (!onSheet(m.P[3 * e.a], m.P[3 * e.a + 1], m.P[3 * e.a + 2]) || !onSheet(m.P[3 * e.b], m.P[3 * e.b + 1], m.P[3 * e.b + 2])) return false;
+        const dx = m.P[3 * e.b] - m.P[3 * e.a], dy = m.P[3 * e.b + 1] - m.P[3 * e.a + 1], dz = m.P[3 * e.b + 2] - m.P[3 * e.a + 2];
+        const es = dx * s[0] + dy * s[1] + dz * s[2], et = dx * t[0] + dy * t[1] + dz * t[2], len = Math.hypot(es, et);
+        return len > 0 && Math.min(Math.abs(es), Math.abs(et)) / len <= sinAxis;
+    });
+    const dotC = (a: Vec3) => c[0] * a[0] + c[1] * a[1] + c[2] * a[2];
+    const W = Math.max(2, Math.round(f.width * scale)), H = Math.max(2, Math.round(f.height * scale));
+    const { png, stats } = renderView(m, view, edges, P, Date.now(), undefined, { uMin: dotC(s) + f.orthoSMin, vMax: dotC(t) + f.orthoTMax, pixelM: f.pixel / scale, W, H }, false);
+    return { ...png, drawn: stats.silhouette.drawn + stats.crease.drawn + stats.boundary.drawn };
 }
