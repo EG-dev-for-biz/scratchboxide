@@ -40,6 +40,23 @@ export const PARTITION_SHELL_VERSION = 'partition-shell/1';
 
 export function partitionShellEnabled(): boolean { return process.env.SCRATCHBOX_K_PARTITION_SHELL === '1'; }
 
+/**
+ * Extra settings for the native solver (scripts/partition_shell.cpp `--set`), from SCRATCHBOX_K_PARTITION_SHELL_SET as
+ * comma-separated key=value pairs (e.g. `topIsAir=1,revolutionParts=1`): every key the driver accepts, sorted, so the
+ * polish cache key changes with them. A malformed pair is thrown, never ignored.
+ */
+export function partitionShellSettings(env: NodeJS.ProcessEnv = process.env): Array<[string, number]> {
+    const raw = (env.SCRATCHBOX_K_PARTITION_SHELL_SET ?? '').trim();
+    if (!raw) return [];
+    const out: Array<[string, number]> = [];
+    for (const part of raw.split(',').map(x => x.trim()).filter(Boolean)) {
+        const m = /^([A-Za-z][A-Za-z0-9]*)=(-?\d+(?:\.\d+)?(?:e-?\d+)?)$/.exec(part);
+        if (!m) throw new Error(`SCRATCHBOX_K_PARTITION_SHELL_SET: "${part}" is not key=number`);
+        out.push([m[1], Number(m[2])]);
+    }
+    return out.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+}
+
 export const PARTITION_SHELL_PARAMS = {
     /** Atlas texel of the baked shell faces (m); the tile's own is about 0.154 m. */
     texelM: 0.12,
@@ -227,7 +244,7 @@ export function buildPartitionShell(cleanedTex: Uint8Array, latticeTex: Uint8Arr
     const inFile = path.join(dir, 'in.bin'), outFile = path.join(dir, 'out.bin'), repFile = path.join(dir, 'report.json');
     fs.writeFileSync(inFile, Buffer.concat(parts));
     const tn = Date.now();
-    const run = spawnSync(binarySync(), ['--input', inFile, '--output', outFile, '--report', repFile, '--set', 'residualTolM', String(P.residualTolM), '--set', 'threads', String(opts.threads ?? Math.max(1, os.cpus().length))], { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 1_800_000 });
+    const run = spawnSync(binarySync(), ['--input', inFile, '--output', outFile, '--report', repFile, '--set', 'residualTolM', String(P.residualTolM), '--set', 'threads', String(opts.threads ?? Math.max(1, os.cpus().length)), ...partitionShellSettings().flatMap(([k, v]) => ['--set', k, String(v)])], { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 1_800_000 });
     const msNative = Date.now() - tn;
     const line = (run.stdout ?? '').trim().split('\n').pop() ?? '';
     let ok = false;

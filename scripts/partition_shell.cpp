@@ -686,6 +686,7 @@ int main(int argc, char** argv) {
         js << "{\"version\":\"partition-shell/1\",\"scanTriangles\":" << nScan << ",\"latticeTriangles\":" << nLat << ",\"facades\":" << nFac
            << ",\"planes\":{\"priorsGiven\":" << in.priors.size() << ",\"priorPlanesKept\":" << priorPlanesKept << ",\"fittedKept\":" << (M.planesKept - priorPlanesKept)
            << ",\"total\":" << M.planesKept << "},\"cells\":" << M.cells << ",\"insideCells\":" << M.insideCells << ",\"labels\":\"" << (P.windingLabels ? "winding" : "votes") << "\""
+           << ",\"roof\":{\"topIsAir\":" << (P.topIsAir ? "true" : "false") << ",\"levels\":" << M.roofLevels << ",\"caps\":" << M.roofCaps << "}"
            << ",\"shell\":{\"triangles\":" << M.shellTriangles << ",\"faces\":" << M.shellFaces << ",\"boundaryEdges\":" << M.boundaryEdges << ",\"nonManifoldEdges\":" << M.nonManifoldEdges
            << ",\"areaM2\":" << M.shellAreaM2 << ",\"volumeM3\":" << M.shellVolumeM3 << ",\"generatedAreaShare\":" << M.generatedAreaShare << ",\"groundClosureAreaM2\":" << M.groundClosureAreaM2
            << ",\"scanWithin05Share\":" << M.scanWithin05Share << ",\"scanWithin15Share\":" << M.scanWithin15Share << ",\"scanRmsM\":" << M.scanRmsM << ",\"explainedRmsM\":" << M.explainedRmsM
