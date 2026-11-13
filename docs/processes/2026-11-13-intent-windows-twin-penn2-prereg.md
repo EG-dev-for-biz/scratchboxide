@@ -89,4 +89,26 @@ excluded by the tool. No earlier comparison judged these twins.
 
 ## Run record
 
+- **Code:** `feat/building-line-drawing` at 3c3fa3db (this preregistration).
+- **Arms' GLBs** (`.scratchbox/judge_arms_penn2/`, gitignored): `a.glb`, `b.glb`, `x2.glb` (b moved 4 m east, positions
+  baked), `x3.glb` (b, texture and normal map removed, one flat colour); reference tile `textured_tile_seams_3.glb` and
+  isolate `raw_clay.glb` of the Penn Station extraction. The arms are GLBs, not a run, so no run's panos are excluded by
+  the tool; run e124077c's notes name no pano, and neither twin used Street View.
+- **Free dry run** (`photo-match-dryrun.test.ts`, stand-ins at the billed edges, credentials unreachable): passed. Four
+  views, every arm and decoy rendered at every pose, 24 stand-in judge calls (12 textured, 12 clay), as estimated.
+- **Pinned poses** (the dry run's `heldOut.judgedPoses`; `autoViews: false` in the paid call):
+
+  | View | Pano | Captured | Heading | Pitch | FOV |
+  |---|---|---|---|---|---|
+  | v0 | hFvT5jKCCB_v_yOFfPyjfw | 2026-04 | 247.8 | 12 | 80 |
+  | v1 | qJuvNN2Hedh19AISpQhzmw | 2026-04 | 354.5 | 12 | 80 |
+  | v2 | 9m1AwCk2nY3sNqSKwQt54w | 2024-08 | 73.2 | 30 | 73 |
+  | v3 | kHQwYm36zsJxPq4lY3VWCw | 2026-04 | 297.2 | 30 | 67 |
+
+- **D for bar V2:** X2 19.46 px, B 10.75 px in the dry run's placement: D = half the gap = **4.36 px**.
+- **Seen in the dry run, before any paid call (no bar changed):** the two arms' renders differ little at these street
+  views. Textured, 2 % of pixels differ by more than 8 levels at v0 and v1 and 13-22 % at v2 and v3; in clay (bar 1's
+  render) 0.1 % at v0 and v1 and 3-5 % at v2 and v3. Both twins draw the station entrance and podium as the same coarse
+  blocks, far from the raw scan. The likely outcome is "the judge cannot tell"; the call is still made once, as planned.
+
 ## Report
