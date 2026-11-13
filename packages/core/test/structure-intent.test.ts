@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { buildingStorey, fitLattice, inferStructureIntent, mirrorShare, splitStrips, STRUCTURE_INTENT_PARAMS, type FacadeEvidence, type IntentFacadeInput } from '../src/node/3d-engine/staged-location/structure-intent';
+import { buildingStorey, fitLattice, photoStorey, inferStructureIntent, mirrorShare, splitStrips, STRUCTURE_INTENT_PARAMS, type FacadeEvidence, type IntentFacadeInput } from '../src/node/3d-engine/staged-location/structure-intent';
 
 type Rect = [number, number, number, number];
 // a facade 400 x 300 px at 0.1 m a pixel, facing +z, its photo's top at t = 15 m (world y = 15 at row 0)
@@ -213,6 +213,22 @@ describe('structure intent: what the design is, decided region by region', () =>
         // where the two overlap (x 10..40 m) their columns are the same world positions
         const overlap = (v: number[]) => v.filter(x => x > 11 && x < 39);
         expect(overlap(a)).toEqual(overlap(b));
+    });
+    it('takes the storey from the photos\' row period when no repeating bands give one', () => {
+        // two faces whose windows were read too sparsely to repeat (one row each), their photos carrying a 4 m row period; a third disagrees
+        const sparse = (id: number, ys: number[], m: number, ncc: number): IntentFacadeInput => ({ facadeId: id, frame: frame(id), rects: grid([60, 140, 260], ys), rowPeriod: { m, ncc } });
+        const faces = [sparse(1, [50], 4.0, 0.8), sparse(2, [90], 4.1, 0.7), sparse(3, [130], 6.5, 0.9)];
+        const st = photoStorey(faces, STRUCTURE_INTENT_PARAMS)!;
+        expect(st.from).toBe('photo');
+        expect(st.bands).toBe(2);
+        expect(st.pitchM).toBeGreaterThan(4.0); expect(st.pitchM).toBeLessThan(4.1);
+        // rows at y = 50 and 90 px are world 10 m and 6 m: both on one 4 m datum
+        expect(Math.min(Math.abs(st.datumY - 2), Math.abs(st.datumY - 2 + st.pitchM), Math.abs(st.datumY - 2 - st.pitchM))).toBeLessThan(0.3);
+        const intent = inferStructureIntent(faces);
+        expect(intent.storey?.from).toBe('photo');
+        // one face alone, or a weak period, gives none
+        expect(photoStorey(faces.slice(0, 1), STRUCTURE_INTENT_PARAMS)).toBeUndefined();
+        expect(photoStorey([sparse(1, [50], 4, 0.3), sparse(2, [90], 4, 0.3)], STRUCTURE_INTENT_PARAMS)).toBeUndefined();
     });
 });
 

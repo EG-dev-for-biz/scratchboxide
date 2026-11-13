@@ -29,7 +29,8 @@ Before drawing anything, settle:
 
 A designed facade repeats: repetition is cheap to design and build, exceptions cost. So the default is one lattice
 per face, and the burden of proof is on the exception, not on the pattern:
-- **Propose top-down.** The bay from the photo's period measured over the whole face (pipeline K's `periodM`; on the
+- **Propose top-down.** The bay from the photo's period measured over the whole face (pipeline K's `periodM`, or the
+  same measurement made by the tool on the facade photo when an older reading carries none; on the
   Empire State Building 5.54 m on 38 of 61 large faces), the windows within a bay from the read windows folded at it,
   the rows on the building's storey. Window boxes refine the module; they do not have to prove the lattice exists.
 - **Test every site** against the photo (and the scan's depth where it resolves a recess; Google's tiles model the
@@ -85,6 +86,8 @@ Then across the whole structure:
   rotation) share their openings only where they agree on what both read; otherwise they are two designs.
 - **Floors**: one storey height and datum for the whole building, from the repeating regions' rows; a region whose
   row pitch agrees sits on those floor lines. A builder does not put one face's floors half a storey off the next.
+  Where the windows were read too sparsely for any band to repeat, the storey is the row period most faces' photos
+  carry (at least two faces agreeing), and is reported as from the photo.
 - **Strips**: an opening several storeys tall whose panes stack is a column of windows; panes side by side are
   mullions.
 

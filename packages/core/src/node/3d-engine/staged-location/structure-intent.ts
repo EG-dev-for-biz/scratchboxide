@@ -83,6 +83,8 @@ export interface IntentFacadeInput {
     tier?: number;
     /** The straightened photo's column period over the whole face (pipeline K's rectify: periodM, periodNcc). */
     period?: { m: number; ncc: number };
+    /** The straightened photo's row period over the whole face (the same autocorrelation along the rows): the building's storey when no repeating bands give one. */
+    rowPeriod?: { m: number; ncc: number };
     /** The wall the facade belongs to (pipeline K's wall grammar: facades of one wall overlap or touch on one plane); absent: grouped by plane. */
     wall?: number;
 }
@@ -131,7 +133,7 @@ export interface FaceLattice {
 }
 export interface TierPattern { tier: number; facades: number[]; pitchM: number; windowM: [number, number]; rowPitchM: number; yRange: [number, number]; bands: number; filled: Array<{ facadeId: number; added: number; withheld: number }>; skipped: Array<{ facadeId: number; reason: string }> }
 export interface PlanFill { to: number; from: number; transform: string; score: number; added: number; withheld: number }
-export interface StructureIntent { version: string; params: IntentParams; facades: IntentFacade[]; /** Each setback tier's pattern (the consensus of its repeating bands) and the poorly read faces that took it. */ tiers?: TierPattern[]; /** Faces filled from their partner under the plan's mirror or rotation. */ planFills?: PlanFill[]; /** The building's storey (world y, m): one floor-to-floor height and a datum every repeating band's rows sit on when they agree. */ storey?: { pitchM: number; datumY: number; bands: number; snapped: number }; twins: Array<{ a: number; b: number; agree: number; used: boolean; reason: string }> }
+export interface StructureIntent { version: string; params: IntentParams; facades: IntentFacade[]; /** Each setback tier's pattern (the consensus of its repeating bands) and the poorly read faces that took it. */ tiers?: TierPattern[]; /** Faces filled from their partner under the plan's mirror or rotation. */ planFills?: PlanFill[]; /** The building's storey (world y, m): one floor-to-floor height and a datum every repeating band's rows sit on when they agree. */ storey?: { pitchM: number; datumY: number; bands: number; snapped: number; /** photo: no two repeating bands gave a storey; it is the row period most faces' photos carry. */ from?: 'photo' }; twins: Array<{ a: number; b: number; agree: number; used: boolean; reason: string }> }
 
 export const STRUCTURE_INTENT_PARAMS = {
     /** Window centres within this share of the median window's size are one column (or row). */
@@ -183,7 +185,7 @@ export const STRUCTURE_INTENT_PARAMS = {
     subWallPlaneM: 0.15, subWallOverlap: 0.3
 };
 export type IntentParams = typeof STRUCTURE_INTENT_PARAMS;
-export const STRUCTURE_INTENT_VERSION = 'structure-intent/4';
+export const STRUCTURE_INTENT_VERSION = 'structure-intent/5';
 
 const med = (v: number[]) => { const a = [...v].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
 const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / Math.max(1, v.length);
@@ -244,6 +246,25 @@ export function buildingStorey(rows: Array<{ pitchM: number; phaseY: number; row
         best = { pitchM: pitch, datumY: (((Math.atan2(cy, cx) / (2 * Math.PI)) * pitch) % pitch + pitch) % pitch, bands: near.length, w };
     }
     return best && best.bands >= 2 ? { pitchM: best.pitchM, datumY: best.datumY, bands: best.bands } : undefined;
+}
+
+/**
+ * The storey from the photos, when no two repeating bands give one (windows read too sparsely for a band to repeat):
+ * the row period most faces' photos carry (each face's weighted by its NCC and area, within storeyTol), at least two
+ * faces agreeing; the datum from those faces' read windows.
+ */
+export function photoStorey(facades: IntentFacadeInput[], P: IntentParams): { pitchM: number; datumY: number; bands: number; from: 'photo' } | undefined {
+    const rows = facades.filter(f => f.rowPeriod && f.rowPeriod.ncc >= P.latticeNcc && f.rowPeriod.m > 2 && f.rowPeriod.m < 8)
+        .map(f => ({ f, m: f.rowPeriod!.m, w: f.rowPeriod!.ncc * f.frame.width * f.frame.height * f.frame.pixel * f.frame.pixel }));
+    let best: { pitchM: number; near: typeof rows; w: number } | undefined;
+    for (const c of rows) {
+        const near = rows.filter(o => Math.abs(o.m - c.m) <= P.storeyTol * c.m), w = near.reduce((a, o) => a + o.w, 0);
+        if (!best || w > best.w) best = { pitchM: near.reduce((a, o) => a + o.m * o.w, 0) / w, near, w };
+    }
+    if (!best || best.near.length < 2) return undefined;
+    const ys = best.near.flatMap(o => splitStrips(o.f.rects, o.f.panes, P).map(r => rowToY(o.f.frame, (r[1] + r[3]) / 2)));
+    let cx = 0, cy = 0; for (const y of ys) { const a = (2 * Math.PI * y) / best.pitchM; cx += Math.cos(a); cy += Math.sin(a); }
+    return { pitchM: best.pitchM, datumY: (((Math.atan2(cy, cx) / (2 * Math.PI)) * best.pitchM) % best.pitchM + best.pitchM) % best.pitchM, bands: best.near.length, from: 'photo' };
 }
 
 /**
@@ -574,7 +595,7 @@ export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: Sy
         const ys = fi.windows.filter(w => fi.regions[w.region] === r).map(w => rowToY(f, (w.rect[1] + w.rect[3]) / 2));
         return { pitchM, phaseY: ys.length ? ys[0] : 0, rows: Math.round((r.y1 - r.y0) / r.pitchPx![1]) };
     }));
-    const st = buildingStorey(rowsSeen, P.storeyTol);
+    const st = buildingStorey(rowsSeen, P.storeyTol) ?? photoStorey(facades, P);
     let snapped = 0;
     const intent: StructureIntent = { version: STRUCTURE_INTENT_VERSION, params: P, facades: st ? facades.map(fc => infer(fc, axisOf(fc), P, st, () => snapped++, readers.get(fc.facadeId))) : first, twins: [] };
     if (st) intent.storey = { ...st, snapped };

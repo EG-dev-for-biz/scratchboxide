@@ -30,6 +30,7 @@ import { readTileTriangles } from '../../../3d-engine/staged-location/tile-textu
 import { renderBlueprints, type BlueprintFacade, type BlueprintInputs, type BlueprintWall } from '../../../3d-engine/staged-location/building-blueprint';
 import { detectSymmetry } from '../../../3d-engine/staged-location/pipeline-k/symmetry';
 import { inferStructureIntent, type FacadeEvidence } from '../../../3d-engine/staged-location/structure-intent';
+import { ORTHO_RECTIFY_PARAMS, axisPeriod, horizontalPeriod } from '../../../3d-engine/staged-location/pipeline-k/ortho-rectify';
 import { facadePhotoFor } from '../../../3d-engine/staged-location/pipeline-k/window-array';
 import { buildMaterialPlan, type KClass, type LibraryStats, type MaterialPlan } from '../../../3d-engine/staged-location/material-plan';
 import { libraryRepoRoot } from '../../../3d-engine/staged-location/pipeline-k/material-sets';
@@ -156,15 +157,20 @@ function depthScan(clayGlb: string): Float32Array | undefined {
 const periodOf = (frame: unknown): { period?: { m: number; ncc: number } } => { const f = frame as { periodM?: number; periodNcc?: number }; return f.periodM && f.periodNcc !== undefined ? { period: { m: f.periodM, ncc: f.periodNcc } } : {}; };
 
 /** A facade photo's luma and masks (pipeline K's straightened ortho beside its uncovered, occluded and featureless masks), for the intent to judge each empty site by; nothing when the photo is not on disk. */
-export function evidenceOf(dir: string, frame: unknown): { evidence?: FacadeEvidence } {
-    const f = frame as { image?: string; width: number; height: number; uncoveredMask?: string; occludedMask?: string };
+export function evidenceOf(dir: string, frame: unknown, opts: { /** Measure the photo's column period here: only for a reading none of whose facades carries one (an older pipeline K reading); a newer reading's missing period means K found none. */ columnPeriod?: boolean } = {}): { evidence?: FacadeEvidence; period?: { m: number; ncc: number }; rowPeriod?: { m: number; ncc: number } } {
+    const f = frame as { image?: string; width: number; height: number; pixel?: number; periodM?: number; uncoveredMask?: string; occludedMask?: string };
     if (!f.image) return {};
     try {
         const ph = facadePhotoFor(dir, { image: f.image, width: f.width, height: f.height, uncoveredMask: f.uncoveredMask, occludedMask: f.occludedMask });
         if (!ph) return {};
         const n = ph.img.width * ph.img.height, luma = new Float32Array(n), px = ph.img.rgba;
         for (let i = 0; i < n; i++) luma[i] = (0.2126 * px[4 * i] + 0.7152 * px[4 * i + 1] + 0.0722 * px[4 * i + 2]) / 255;
-        return { evidence: { W: ph.img.width, H: ph.img.height, luma, valid: ph.valid, ...(ph.occluded ? { occluded: ph.occluded } : {}), ...(ph.featureless ? { featureless: ph.featureless } : {}) } };
+        // the photo's own periods where pipeline K's reading carries none (an older reading), and its row period always: the same autocorrelation K's rectify runs, over the texels the photo reached
+        const pixelM = (f.pixel ?? 0) * f.width / ph.img.width, masked = { width: ph.img.width, height: ph.img.height, rgba: new Uint8Array(px) };
+        for (let i = 0; i < n; i++) if (!ph.valid[i]) masked.rgba[4 * i + 3] = 0;
+        const col = pixelM > 0 && opts.columnPeriod && !f.periodM ? horizontalPeriod(masked, pixelM) : undefined;
+        const row = pixelM > 0 ? axisPeriod(masked, pixelM, 'y', ORTHO_RECTIFY_PARAMS.storeyMinM, ORTHO_RECTIFY_PARAMS.storeyMaxM) : undefined;
+        return { evidence: { W: ph.img.width, H: ph.img.height, luma, valid: ph.valid, ...(ph.occluded ? { occluded: ph.occluded } : {}), ...(ph.featureless ? { featureless: ph.featureless } : {}) }, ...(col ? { period: { m: col.periodPx * pixelM, ncc: col.ncc } } : {}), ...(row ? { rowPeriod: { m: row.periodPx * pixelM, ncc: row.ncc } } : {}) };
     } catch { return {}; }
 }
 
@@ -192,7 +198,7 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
     const tierOf = new Map<number, number>();
     const wallOf = new Map<number, number>();
     for (const w of (k?.walls ?? []) as Array<BlueprintWall & { facades?: number[]; tier?: number }>) { if (w.tier !== undefined) for (const f of w.facades ?? []) tierOf.set(f, w.tier); for (const f of w.facades ?? []) wallOf.set(f, w.wallId); }
-    const intent = k?.facades.length ? inferStructureIntent(k.facades.map(f => ({ facadeId: f.facadeId, frame: f.frame, rects: f.rects, panes: f.panes, ...(tierOf.has(f.facadeId) ? { tier: tierOf.get(f.facadeId) } : {}), ...(wallOf.has(f.facadeId) ? { wall: wallOf.get(f.facadeId) } : {}), ...periodOf(f.frame), ...evidenceOf(k.dir, f.frame) })), inputs.symmetry, undefined, { scan: depthScan(glb) ?? soup }) : undefined;
+    const intent = k?.facades.length ? inferStructureIntent(k.facades.map(f => ({ facadeId: f.facadeId, frame: f.frame, rects: f.rects, panes: f.panes, ...(tierOf.has(f.facadeId) ? { tier: tierOf.get(f.facadeId) } : {}), ...(wallOf.has(f.facadeId) ? { wall: wallOf.get(f.facadeId) } : {}), ...periodOf(f.frame), ...evidenceOf(k.dir, f.frame, { columnPeriod: !k.facades.some(o => (o.frame as { periodM?: number }).periodM) }) })), inputs.symmetry, undefined, { scan: depthScan(glb) ?? soup }) : undefined;
     if (intent) inputs.intent = intent;
     // the whole building's material map: the run's de-lit twin when K wrote one (its model record names it), else the textured scan beside the cut-out; the intent's openings keep glass and wall apart
     let materialMapNote = '';
@@ -252,7 +258,7 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
     for (const f of intent?.facades ?? []) { for (const g of f.regions) decisions[g.decision] = (decisions[g.decision] ?? 0) + 1; for (const w of f.windows) sources[w.source] = (sources[w.source] ?? 0) + 1; }
     let withheld = 0, extended = 0, stacked = 0, piers = 0; for (const f of intent?.facades ?? []) { withheld += f.evidence?.withheld ?? 0; extended += f.evidence?.extended ?? 0; stacked += f.evidence?.stacked ?? 0; piers += f.structure?.piers.length ?? 0; }
     const tierFaces = (intent?.tiers ?? []).reduce((a, t) => a + t.filled.length, 0), planFaces = (intent?.planFills ?? []).filter(p2 => p2.added).length;
-    const intentNote = intent ? `the design intent: ${Object.entries(decisions).map(([d, n]) => `${n} regions ${d}`).join(', ')}; windows ${Object.entries(sources).map(([s2, n]) => `${n} ${s2}`).join(', ')} (${withheld} sites withheld where the photo reads wall, ${extended} columns carried on toward the walls\' ends, ${stacked} laid through gaps between matching bands; ${piers} piers; ${tierFaces} poorly read faces took their setback tier\'s pattern, ${planFaces} took their partner\'s windows under the plan\'s symmetry)${intent.storey ? `; the building's storey ${intent.storey.pitchM.toFixed(2)} m (${intent.storey.snapped} bands on its floor lines)` : ''}; ${intent.twins.filter(t => t.used).length} twin facade pairs shared` : 'no design intent (no facade readings)';
+    const intentNote = intent ? `the design intent: ${Object.entries(decisions).map(([d, n]) => `${n} regions ${d}`).join(', ')}; windows ${Object.entries(sources).map(([s2, n]) => `${n} ${s2}`).join(', ')} (${withheld} sites withheld where the photo reads wall, ${extended} columns carried on toward the walls\' ends, ${stacked} laid through gaps between matching bands; ${piers} piers; ${tierFaces} poorly read faces took their setback tier\'s pattern, ${planFaces} took their partner\'s windows under the plan\'s symmetry)${intent.storey ? `; the building's storey ${intent.storey.pitchM.toFixed(2)} m (${intent.storey.from === 'photo' ? 'the row period most faces\' photos carry, no repeating bands giving one; ' : ''}${intent.storey.snapped} bands on its floor lines)` : ''}; ${intent.twins.filter(t => t.used).length} twin facade pairs shared` : 'no design intent (no facade readings)';
     const roles = new Map<string, number>(); for (const m of report.materials ?? []) roles.set(m.role, (roles.get(m.role) ?? 0) + 1);
     const json = path.join(outDir, 'blueprint.json');
     fs.writeFileSync(json, JSON.stringify({ source: glb, ...(k ? { windowsFrom: k.dir } : {}), ...(inputs.structure ? { structureFrom: structurePath } : {}), ...report }, null, 1));
