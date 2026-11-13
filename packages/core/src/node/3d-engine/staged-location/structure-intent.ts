@@ -46,6 +46,16 @@
  *     pattern: the column pitch its repeating bands carry most, with their window size and row pitch. A face holding
  *     under poorShare of the sites that pattern lays over it takes the pattern, phased to its own read windows, only
  *     when those windows sit on it; a face whose windows do not is its own design (and is reported as such).
+ * 11. Top-down, the burden of proof on the exception (faceLattice). A designed face repeats unless something shows
+ *     otherwise, so each face is first proposed as one lattice: its bay from the photo's whole-face period (pipeline K's
+ *     rectify: periodM at NCC latticeNcc or more, else the bay most faces' photos carry), the windows within a bay from
+ *     the read boxes folded at it, its rows on the building's storey. Every site is tested by the photo (and by the
+ *     scan's depth where the scan resolves a window's recess; Google's tiles do not, so there it only says where the
+ *     face's surface is). Contradicted sites are a detail only when coherent (a run over two rows or three columns,
+ *     backed by both channels, or twice the size where only one channel speaks); isolated ones are noise the pattern
+ *     overrides (flagged). A bay column contradicted down most of the face is dropped as folded wrongly. The lattice
+ *     replaces the bottom-up reading only when it explains latticeExplained of the windows read and overrides at most
+ *     latticeMaxNoise of its sites; reads off the lattice stay as read.
  * 10. The plan's symmetry. Under a plan mirror or rotation scoring planScore or more, a poorly read face whose mapped
  *     partner coincides with it (normal, plane, extent) takes the partner's windows (its own reading and its own rules'
  *     inferences, never what other faces lent it). Tier and plan windows are vetted by the face's photo like any other.
@@ -68,12 +78,14 @@ export interface IntentFacadeInput {
     evidence?: FacadeEvidence;
     /** The setback tier the facade belongs to (pipeline K's wall grammar); absent: facades are grouped by their top height. */
     tier?: number;
+    /** The straightened photo's column period over the whole face (pipeline K's rectify: periodM, periodNcc). */
+    period?: { m: number; ncc: number };
 }
 
-export type IntentSource = 'measured' | 'repeat' | 'mirror' | 'twin' | 'tier' | 'plan';
+export type IntentSource = 'measured' | 'repeat' | 'mirror' | 'twin' | 'tier' | 'plan' | 'pattern';
 export type RegionDecision = 'repeat' | 'symmetric' | 'neither' | 'blank';
 
-export interface IntentWindow { rect: Rect; panes: number; source: IntentSource; family: number; region: number; /** For an inferred window: what the photo said at its site (window: it shows one; unread or occluded: it could not tell). */ evidence?: SiteEvidence }
+export interface IntentWindow { rect: Rect; panes: number; source: IntentSource; family: number; region: number; /** For an inferred window: what the photo said at its site (window: it shows one; unread or occluded: it could not tell). */ evidence?: SiteEvidence; /** A pattern site the evidence contradicted in isolation (noise the pattern overrides). */ overridden?: true }
 export interface IntentRegion {
     /** The band, in the facade photo's pixel rows. */
     y0: number; y1: number;
@@ -92,6 +104,25 @@ export interface IntentFacade {
     structure?: { piers: Rect[]; floors: number[] };
     /** Whether the photo's evidence judged the empty sites, and what it did: sites withheld as wall, columns carried toward the wall's ends, windows laid through gaps between matching bands. */
     evidence?: { used: boolean; withheld: number; extended: number; stacked: number };
+    /** The face read top-down as one lattice (see faceLattice): tried, and whether it explained the evidence well enough to stand. */
+    lattice?: FaceLattice;
+}
+
+/**
+ * A face's top-down hypothesis: one lattice over the whole face (the bay from the photo's whole-face period, the
+ * windows within a bay from the read boxes folded at it, the rows on the building's storey), every site tested by two
+ * independent channels (the photo; the scan's depth: a window is a recess), contradictions sorted into coherent details
+ * (kept: no window) and isolated noise (overridden by the pattern), and the hypothesis kept only when it explains the
+ * windows read and overrides little.
+ */
+export interface FaceLattice {
+    accepted: boolean; reason: string;
+    bayM: number; bayFrom: 'photo' | 'building'; offsetsM: number[]; /** Window columns of the bay dropped: the evidence contradicted them down the face. */ droppedColumns: number; windowM: [number, number]; rowPitchM: number;
+    sites: number; yes: number; no: number; unknown: number; noiseOverridden: number; detailSites: number;
+    details: Array<{ sites: number; rows: [number, number]; cols: [number, number]; twoSource: number }>;
+    /** Share of the windows read (inside the lattice's extent) that sit on a lattice site. */
+    explained: number;
+    depth: { learned: boolean; recessM?: number };
 }
 export interface TierPattern { tier: number; facades: number[]; pitchM: number; windowM: [number, number]; rowPitchM: number; yRange: [number, number]; bands: number; filled: Array<{ facadeId: number; added: number; withheld: number }>; skipped: Array<{ facadeId: number; reason: string }> }
 export interface PlanFill { to: number; from: number; transform: string; score: number; added: number; withheld: number }
@@ -125,10 +156,25 @@ export const STRUCTURE_INTENT_PARAMS = {
     /** Tier sharing: a tier's pattern is the column pitch most of its repeating bands' windows carry (within tierPitchTol); a face holding under poorShare of the sites that pattern lays over it takes the pattern when at least tierOnShare of its read windows (tierMinRead or more) sit on it and their width is within tierSizeTol of the tier's. Faces group by their top height within tierTopM when no tier is given. */
     tierPitchTol: 0.08, poorShare: 0.5, tierOnShare: 0.6, tierMinRead: 3, tierSizeTol: 0.3, tierTopM: 3,
     /** Plan symmetry: a transform of the plan scoring planScore or more maps a well read face (planRichRatio times the windows, at least planMinWindows) onto a poorly read one when the mapped face's normal agrees (planNormalCos), its plane lies within planOffsetM and its extent overlaps the face's by planExtentIoU. */
-    planScore: 0.9, planRichRatio: 2, planMinWindows: 10, planNormalCos: 0.95, planOffsetM: 1.5, planExtentIoU: 0.7
+    planScore: 0.9, planRichRatio: 2, planMinWindows: 10, planNormalCos: 0.95, planOffsetM: 1.5, planExtentIoU: 0.7,
+    /**
+     * The face lattice: the photo's period stands when its NCC is latticeNcc or more (else the building's consensus bay:
+     * the period most faces' photos carry, within tierPitchTol); a fold peak holding latticePeakShare of the strongest
+     * (and at least 3 windows) is a window column within the bay. A site's depth votes window when it is recessed by
+     * half the read windows' typical recess, wall when under recessFlatShare of it; the depth is learned when the read
+     * windows recess by recessMinM or more (65% of them). A run of contradicted sites is a detail when it holds
+     * detailMinSites or more over two rows or three columns and both channels contradicted at least half of it; else
+     * each is noise the pattern overrides. The lattice stands when it explains latticeExplained of the windows read and
+     * overrides at most latticeMaxNoise of its sites. The scan's surface must lie within depthBandM of the face's plane
+     * at a site for it to be part of the face.
+     */
+    latticeNcc: 0.5, latticePeakShare: 0.2, recessMinM: 0.04, recessFlatShare: 0.15, detailMinSites: 4,
+    latticeExplained: 0.6, latticeMaxNoise: 0.15, depthBandM: 1.5,
+    /** A window column of the bay contradicted on columnNoShare of its sites down the face is dropped from the lattice (folded wrongly), not kept as a detail. */
+    columnNoShare: 0.6
 };
 export type IntentParams = typeof STRUCTURE_INTENT_PARAMS;
-export const STRUCTURE_INTENT_VERSION = 'structure-intent/3';
+export const STRUCTURE_INTENT_VERSION = 'structure-intent/4';
 
 const med = (v: number[]) => { const a = [...v].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
 const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / Math.max(1, v.length);
@@ -504,7 +550,7 @@ function carry(rects: Rect[], from: IntentFacadeInput, to: IntentFacadeInput, t:
 }
 
 /** The design intent of every facade (see the module comment). `symmetry`: pipeline K's symmetry reading (facade axes and twins). */
-export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: SymmetryReport, P: IntentParams = STRUCTURE_INTENT_PARAMS): StructureIntent {
+export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: SymmetryReport, P: IntentParams = STRUCTURE_INTENT_PARAMS, opts: { /** The scan (triangle soup, the facades' frame): the depth channel and where each face's surface is. */ scan?: Float32Array | Float64Array } = {}): StructureIntent {
     const byId = new Map(facades.map(f => [f.facadeId, f]));
     const axisOf = (fc: IntentFacadeInput) => {
         const rd = symmetry?.facades.find(f => f.facadeId === fc.facadeId);
@@ -523,6 +569,11 @@ export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: Sy
     let snapped = 0;
     const intent: StructureIntent = { version: STRUCTURE_INTENT_VERSION, params: P, facades: st ? facades.map(fc => infer(fc, axisOf(fc), P, st, () => snapped++, readers.get(fc.facadeId))) : first, twins: [] };
     if (st) intent.storey = { ...st, snapped };
+    // top-down: each face as one lattice, kept where it explains the evidence better than the bottom-up reading
+    const bays = facades.filter(f => f.period && f.period.ncc >= P.latticeNcc).map(f => ({ m: f.period!.m, w: f.period!.ncc * f.frame.width * f.frame.height * f.frame.pixel * f.frame.pixel }));
+    let buildingBay: number | undefined, bw = 0;
+    for (const b of bays) { const near = bays.filter(o => Math.abs(o.m - b.m) <= P.tierPitchTol * b.m), w = near.reduce((a, o) => a + o.w, 0); if (w > bw) { bw = w; buildingBay = near.reduce((a, o) => a + o.m * o.w, 0) / w; } }
+    intent.facades = intent.facades.map((I, k) => faceLattice(I, facades[k], readers.get(facades[k].facadeId), opts.scan, st, buildingBay, P));
     const intentOf = new Map(intent.facades.map(f => [f.facadeId, f]));
     // across facades: accepted twins that agree on what both read share their windows
     for (const tw of symmetry?.twins ?? []) {
@@ -670,4 +721,192 @@ function fillByPlan(intent: StructureIntent, facades: IntentFacadeInput[], reade
         const r = layOn(IA, A, readers.get(A.facadeId), sites, 'plan', fam, 1);
         intent.planFills.push({ to: A.facadeId, from: best.B.facadeId, transform: `${best.t.kind} ${best.t.angleDeg.toFixed(1)} deg${best.inv ? ' (inverse)' : ''}`, score: best.t.score, ...r });
     }
+}
+
+/** The scan as seen along a face's normal: per cell (2 photo pixels), the signed distance (m, outward +) of the front-most surface facing out within depthBandM x 2 of the plane; NaN where none. */
+export function faceDepth(scan: Float32Array | Float64Array, f: IntentFacadeInput['frame'], band: number): { W: number; H: number; cell: number; d: Float32Array } {
+    const cell = f.pixel * 2, W = Math.ceil(f.width / 2), H = Math.ceil(f.height / 2), d = new Float32Array(W * H).fill(NaN);
+    const c = f.centroid, n = f.normal, S = f.axisS, T = f.axisT, nTri = scan.length / 9;
+    const ps = [0, 0, 0], pt = [0, 0, 0], pd = [0, 0, 0];
+    for (let t = 0; t < nTri; t++) {
+        const o = 9 * t;
+        let near = false;
+        for (let k = 0; k < 3; k++) {
+            const x = scan[o + 3 * k] - c[0], y = scan[o + 3 * k + 1] - c[1], z = scan[o + 3 * k + 2] - c[2];
+            pd[k] = x * n[0] + y * n[1] + z * n[2]; ps[k] = x * S[0] + y * S[1] + z * S[2]; pt[k] = x * T[0] + y * T[1] + z * T[2];
+            if (Math.abs(pd[k]) <= 2 * band) near = true;
+        }
+        if (!near) continue;
+        // facing out along the face's normal (a reveal's side or a ceiling is not the face)
+        const e1 = [ps[1] - ps[0], pt[1] - pt[0], pd[1] - pd[0]], e2 = [ps[2] - ps[0], pt[2] - pt[0], pd[2] - pd[0]];
+        const nz = e1[0] * e2[1] - e1[1] * e2[0], len = Math.hypot(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], nz);
+        if (!(len > 0) || Math.abs(nz) / len < 0.5) continue;
+        const xs = ps.map(v => (v - f.orthoSMin) / cell), ys = pt.map(v => (f.orthoTMax - v) / cell);
+        const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(W - 1, Math.ceil(Math.max(...xs))), y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(H - 1, Math.ceil(Math.max(...ys)));
+        const area = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0]);
+        if (!(Math.abs(area) > 1e-9)) continue;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const px = x + 0.5, py = y + 0.5;
+            const w0 = ((xs[1] - px) * (ys[2] - py) - (xs[2] - px) * (ys[1] - py)) / area, w1 = ((xs[2] - px) * (ys[0] - py) - (xs[0] - px) * (ys[2] - py)) / area, w2 = 1 - w0 - w1;
+            if (w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4) continue;
+            const v = w0 * pd[0] + w1 * pd[1] + w2 * pd[2];
+            if (Math.abs(v) > 2 * band) continue;
+            const i = y * W + x;
+            if (!(v <= d[i])) d[i] = v; // NaN compares false: the first surface, else the front-most
+        }
+    }
+    return { W, H, cell, d };
+}
+
+/** Median of a depth raster over a rectangle (photo pixels), and the share of its cells holding a surface. */
+function depthIn(D: { W: number; H: number; d: Float32Array }, r: number[]): { med: number; cover: number } {
+    const x0 = Math.max(0, Math.floor(r[0] / 2)), x1 = Math.min(D.W, Math.ceil(r[2] / 2)), y0 = Math.max(0, Math.floor(r[1] / 2)), y1 = Math.min(D.H, Math.ceil(r[3] / 2));
+    const v: number[] = []; let n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { n++; const z = D.d[y * D.W + x]; if (Number.isFinite(z)) v.push(z); }
+    return { med: v.length ? med(v) : NaN, cover: n ? v.length / n : 0 };
+}
+const ringOf = (r: number[]): number[] => { const w = r[2] - r[0], h = r[3] - r[1]; return [r[0] - 0.5 * w, r[1] - 0.5 * h, r[2] + 0.5 * w, r[3] + 0.5 * h]; };
+const shrink = (r: number[], k: number): number[] => { const w = r[2] - r[0], h = r[3] - r[1]; return [r[0] + k * w, r[1] + k * h, r[2] - k * w, r[3] - k * h]; };
+
+/** The face read top-down as one lattice (see FaceLattice); returns the facade's intent, replaced by the lattice's where it stands. */
+function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceReader | undefined, scan: Float32Array | Float64Array | undefined, storey: { pitchM: number; datumY: number } | undefined, buildingBay: number | undefined, P: IntentParams): IntentFacade {
+    const f = fc.frame, px = f.pixel;
+    const read = splitStrips(fc.rects, fc.panes, P);
+    if (read.length < 6) return I;
+    const wRead = med(read.map(r => r[2] - r[0])), hRead = med(read.map(r => r[3] - r[1]));
+    // the rows: the building's storey, else the face's own (its read rows' lattice)
+    let rowPitchPx: number | undefined, rowPhase: number;
+    const yc = read.map(r => (r[1] + r[3]) / 2);
+    if (storey) { rowPitchPx = storey.pitchM / px; }
+    else { const rows = cluster1(yc, 0.35 * hRead).at, l = fitLattice(rows, P.latticeTol, P.minRepeat); if (l && l.share >= P.latticeShare) rowPitchPx = l.pitch; }
+    if (!rowPitchPx) { I.lattice = { accepted: false, reason: 'no row pitch: no building storey and the face\'s rows do not repeat', bayM: 0, bayFrom: 'photo', offsetsM: [], droppedColumns: 0, windowM: [wRead * px, hRead * px], rowPitchM: 0, sites: 0, yes: 0, no: 0, unknown: 0, noiseOverridden: 0, detailSites: 0, details: [], explained: 0, depth: { learned: false } }; return I; }
+    rowPhase = circularPhase(yc, rowPitchPx);
+    // the depth channel: learned from the read windows (a recess against the wall around them)
+    const D = scan ? faceDepth(scan, f, P.depthBandM) : undefined;
+    let recess: number | undefined;
+    if (D) {
+        const rs = read.map(r => { const a = depthIn(D, shrink(r, 0.2)), b = depthIn(D, ringOf(r)); return a.cover > 0.5 && b.cover > 0.3 ? b.med - a.med : NaN; }).filter(Number.isFinite);
+        if (rs.length >= 6 && med(rs) >= P.recessMinM && rs.filter(v => v > 0).length >= 0.65 * rs.length) recess = med(rs);
+    }
+    // the bay: the photo's period when it is clear, else the building's; whichever explains more of the windows read
+    const cands: Array<{ m: number; from: 'photo' | 'building' }> = [];
+    if (fc.period && fc.period.ncc >= P.latticeNcc) cands.push({ m: fc.period.m, from: 'photo' });
+    if (buildingBay && !cands.some(c => Math.abs(c.m - buildingBay) <= P.tierPitchTol * c.m)) cands.push({ m: buildingBay, from: 'building' });
+    if (!cands.length) return I;
+    const xc = read.map(r => (r[0] + r[2]) / 2);
+    let bestL: { bay: number; from: 'photo' | 'building'; offs: number[]; explained: number } | undefined;
+    for (const c of cands) {
+        const bay = c.m / px;
+        if (bay < 1.2 * wRead) continue;
+        // fold the read windows at the bay: peaks of the histogram (bins a tenth of a window wide) are the window columns within it
+        const bin = Math.max(1, wRead / 10), nb = Math.ceil(bay / bin), h = new Float64Array(nb);
+        for (const x of xc) h[Math.floor((((x % bay) + bay) % bay) / bin) % nb] += 1;
+        const sm = new Float64Array(nb); const R = Math.max(1, Math.round(0.3 * wRead / bin));
+        for (let i = 0; i < nb; i++) for (let j = -R; j <= R; j++) sm[i] += h[(i + j + nb) % nb];
+        const top = Math.max(...sm), offs: number[] = [];
+        for (let i = 0; i < nb; i++) if (sm[i] >= Math.max(3, P.latticePeakShare * top) && sm[i] >= sm[(i + 1) % nb] && sm[i] > sm[(i - 1 + nb) % nb]) offs.push((i + 0.5) * bin);
+        // peaks closer than 0.8 window widths are one column
+        const merged: number[] = [];
+        for (const o of offs.sort((a, b) => a - b)) if (!merged.length || o - merged[merged.length - 1] > 0.8 * wRead) merged.push(o);
+        if (merged.length > 1 && merged[0] + bay - merged[merged.length - 1] <= 0.8 * wRead) merged.pop();
+        if (!merged.length) continue;
+        // each column at the mean of the windows folded near it (a flat-topped peak's first bin is not its centre)
+        for (let m = 0; m < merged.length; m++) {
+            const near = xc.map(x => { const d = ((((x - merged[m]) % bay) + bay * 1.5) % bay) - bay / 2; return d; }).filter(d => Math.abs(d) <= 0.5 * wRead);
+            if (near.length) merged[m] = (((merged[m] + near.reduce((a, b) => a + b, 0) / near.length) % bay) + bay) % bay;
+        }
+        const onCol = (x: number) => merged.some(o => { const d = Math.abs((((x - o) % bay) + bay) % bay); return Math.min(d, bay - d) <= 0.35 * wRead; });
+        const onRow = (y: number) => { const d = Math.abs((((y - rowPhase) % rowPitchPx!) + rowPitchPx!) % rowPitchPx!); return Math.min(d, rowPitchPx! - d) <= 0.35 * hRead; };
+        const explained = read.filter((_, i) => onCol(xc[i]) && onRow(yc[i])).length / read.length;
+        if (!bestL || explained > bestL.explained) bestL = { bay, from: c.from, offs: merged, explained };
+    }
+    const base: FaceLattice = { accepted: false, reason: '', bayM: (bestL?.bay ?? 0) * px, bayFrom: bestL?.from ?? 'photo', offsetsM: (bestL?.offs ?? []).map(o => o * px), droppedColumns: 0, windowM: [wRead * px, hRead * px], rowPitchM: rowPitchPx * px, sites: 0, yes: 0, no: 0, unknown: 0, noiseOverridden: 0, detailSites: 0, details: [], explained: bestL?.explained ?? 0, depth: { learned: recess !== undefined, ...(recess !== undefined ? { recessM: recess } : {}) } };
+    if (!bestL || bestL.explained < P.latticeExplained) { I.lattice = { ...base, reason: `the lattice explains only ${Math.round((bestL?.explained ?? 0) * 100)}% of the windows read: the face is not one pattern` }; return I; }
+    // every site of the lattice on the face's surface
+    const { bay } = bestL;
+    let offs = bestL.offs;
+    let colsX: number[] = [], colOff: number[] = [];
+    const buildCols = () => {
+        const cs: Array<[number, number]> = [];
+        for (let k = -1; k * bay <= f.width + bay; k++) offs.forEach((o, oi) => { const cx = k * bay + o; if (cx - wRead / 2 >= 0 && cx + wRead / 2 <= f.width) cs.push([cx, oi]); });
+        cs.sort((a, b) => a[0] - b[0]); colsX = cs.map(c => c[0]); colOff = cs.map(c => c[1]);
+    };
+    buildCols();
+    const rowsY: number[] = [];
+    for (let k = Math.ceil((hRead / 2 - rowPhase) / rowPitchPx); rowPhase + k * rowPitchPx + hRead / 2 <= f.height; k++) rowsY.push(rowPhase + k * rowPitchPx);
+    let nC = colsX.length; const nR = rowsY.length;
+    // the read extent bounds the face where there is no scan to say where its surface is
+    const yMin = Math.min(...read.map(r => r[1])) - rowPitchPx, yMax = Math.max(...read.map(r => r[3])) + rowPitchPx;
+    type Vote = -2 | -1 | 0 | 1 | 2; // -2 off the face; -1 no; 0 unknown; 1 yes; 2 read
+    let vote = new Int8Array(nC * nR), twoNo = new Uint8Array(nC * nR);
+    const siteRect = (c: number, r: number): Rect => [colsX[c] - wRead / 2, rowsY[r] - hRead / 2, colsX[c] + wRead / 2, rowsY[r] + hRead / 2];
+    let droppedCols = 0;
+    for (let pass = 0; pass < 2; pass++) {
+    vote = new Int8Array(nC * nR); twoNo = new Uint8Array(nC * nR);
+    for (let r = 0; r < nR; r++) for (let c = 0; c < nC; c++) {
+        const site = siteRect(c, r), i = r * nC + c;
+        if (D) { const ring = depthIn(D, ringOf(site)); if (ring.cover < 0.5 || Math.abs(ring.med) > P.depthBandM) { vote[i] = -2; continue; } }
+        else if (rowsY[r] < yMin || rowsY[r] > yMax) { vote[i] = -2; continue; }
+        if (read.some(q => rectIoU(q, site) >= 0.2)) { vote[i] = 2; continue; }
+        const pe = reader?.learned ? reader.site(site) : undefined;
+        const ph = pe === 'window' ? 1 : pe === 'wall' ? -1 : 0;
+        let dv = 0;
+        if (D && recess !== undefined) { const a = depthIn(D, shrink(site, 0.2)), b = depthIn(D, ringOf(site)); if (a.cover > 0.5 && b.cover > 0.3) { const rr = b.med - a.med; dv = rr >= 0.5 * recess ? 1 : rr <= P.recessFlatShare * recess ? -1 : 0; } }
+        const v = ph + dv;
+        vote[i] = (v >= 1 ? 1 : v <= -1 ? -1 : 0) as Vote;
+        if (ph < 0 && dv < 0) twoNo[i] = 1;
+    }
+    // a window column of the bay that the evidence contradicts down most of the face was folded wrongly: it is not a detail but no column at all; dropped, the votes taken again
+    if (pass || offs.length < 2) break;
+    const bad = offs.map((_, oi) => { let n = 0, no = 0; for (let c = 0; c < nC; c++) if (colOff[c] === oi) for (let r = 0; r < nR; r++) { const v = vote[r * nC + c]; if (v === -2) continue; n++; if (v === -1) no++; } return n > 0 && no / n >= P.columnNoShare; });
+    if (!bad.some(Boolean) || bad.every(Boolean)) break;
+    droppedCols = bad.filter(Boolean).length;
+    offs = offs.filter((_, oi) => !bad[oi]);
+    buildCols(); nC = colsX.length;
+    }
+    // the contradicted sites: coherent runs are details, isolated ones noise
+    const seen = new Uint8Array(nC * nR), detail = new Uint8Array(nC * nR);
+    const details: FaceLattice['details'] = [];
+    let noise = 0;
+    for (let i = 0; i < nC * nR; i++) {
+        if (vote[i] !== -1 || seen[i]) continue;
+        const comp: number[] = [], stack = [i]; seen[i] = 1;
+        while (stack.length) { const j = stack.pop()!; comp.push(j); const c = j % nC, r = (j - c) / nC; for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const cc = c + dc, rr = r + dr; if (cc < 0 || rr < 0 || cc >= nC || rr >= nR) continue; const k = rr * nC + cc; if (!seen[k] && vote[k] === -1) { seen[k] = 1; stack.push(k); } } }
+        const cs = comp.map(j => j % nC), rs2 = comp.map(j => Math.floor(j / nC));
+        const spanR = Math.max(...rs2) - Math.min(...rs2) + 1, spanC = Math.max(...cs) - Math.min(...cs) + 1, two = comp.filter(j => twoNo[j]).length / comp.length;
+        const coherent = comp.length >= P.detailMinSites && (spanR >= 2 || spanC >= 3) && (two >= 0.5 || (recess === undefined && comp.length >= 2 * P.detailMinSites));
+        if (coherent) { for (const j of comp) detail[j] = 1; details.push({ sites: comp.length, rows: [Math.min(...rs2), Math.max(...rs2)], cols: [Math.min(...cs), Math.max(...cs)], twoSource: Math.round(two * 100) / 100 }); }
+        else noise += comp.length;
+    }
+    const onFace = [...vote].filter(v => v !== -2).length;
+    const counts = { yes: [...vote].filter(v => v >= 1).length, no: [...vote].filter(v => v === -1).length, unknown: [...vote].filter(v => v === 0).length };
+    const lat: FaceLattice = { ...base, offsetsM: offs.map(o => o * px), droppedColumns: droppedCols, sites: onFace, ...counts, noiseOverridden: noise, detailSites: details.reduce((a, d) => a + d.sites, 0), details };
+    if (!onFace || noise > P.latticeMaxNoise * onFace) { I.lattice = { ...lat, reason: `the pattern would override ${noise} of ${onFace} sites the evidence contradicts in isolation: too much to call noise` }; return I; }
+    // it stands: the face's windows are the lattice's, every site on the face but the details; reads off the lattice stay as read (a detail the photo showed)
+    // each window split as the read windows are (their panes side by side, the median)
+    const sideBySide = (r: Rect) => (fc.panes ?? []).filter(p => p[3] - p[1] >= 0.6 * (r[3] - r[1]) && Math.max(0, Math.min(r[2], p[2]) - Math.max(r[0], p[0])) * Math.max(0, Math.min(r[3], p[3]) - Math.max(r[1], p[1])) >= 0.6 * Math.max(1e-9, (p[2] - p[0]) * (p[3] - p[1]))).length;
+    const fam = 0, pn = Math.min(P.maxPanes, Math.max(1, med(read.map(sideBySide))));
+    const windows: IntentWindow[] = [];
+    for (let r = 0; r < nR; r++) for (let c = 0; c < nC; c++) {
+        const i = r * nC + c; if (vote[i] === -2 || detail[i]) continue;
+        const site = siteRect(c, r);
+        windows.push({ rect: site, panes: pn, source: vote[i] === 2 ? 'measured' : 'pattern', family: fam, region: 0, ...(vote[i] === 2 ? {} : { evidence: (reader ? (reader.vet(site) === 'seen' ? 'unread' : reader.vet(site)) : 'unread') as SiteEvidence }), ...(vote[i] === -1 ? { overridden: true as const } : {}) });
+    }
+    const offLattice = read.filter(q => !windows.some(w => rectIoU(w.rect, q) > 0.1));
+    for (const q of offLattice) windows.push({ rect: q, panes: 1, source: 'measured', family: 1, region: 1 });
+    const out: IntentFacade = {
+        ...I,
+        windows,
+        families: [{ id: 0, w: wRead, h: hRead, panes: pn }, { id: 1, w: med(offLattice.map(q => q[2] - q[0])) || wRead, h: med(offLattice.map(q => q[3] - q[1])) || hRead, panes: 1 }],
+        regions: [
+            { y0: Math.min(...rowsY) - hRead / 2, y1: Math.max(...rowsY) + hRead / 2, decision: 'repeat', scores: { columns: bestL.explained, rows: 1, mirror: 0 }, pitchPx: [bay, rowPitchPx], readWindows: read.length, added: windows.filter(w => w.source === 'pattern').length, reason: `one lattice over the face: a ${(bay * px).toFixed(2)} m bay (${bestL.from === 'photo' ? "the photo's own period" : "the building's"}) holding ${offs.length} window column${offs.length > 1 ? 's' : ''}, rows ${(rowPitchPx * px).toFixed(2)} m apart; it explains ${Math.round(bestL.explained * 100)}% of the windows read; ${details.length} coherent details kept, ${noise} isolated contradictions overridden` },
+            { y0: 0, y1: f.height, decision: 'neither', scores: { columns: 0, rows: 0, mirror: 0 }, readWindows: offLattice.length, added: 0, reason: `${offLattice.length} windows read off the lattice: kept as read (details the photo showed)` }
+        ],
+        structure: { piers: [], floors: rowsY.slice(1).map((y, k) => Math.round(((y + rowsY[k]) / 2) * 10) / 10) },
+        lattice: { ...lat, accepted: true, reason: 'the face is one pattern with its details' }
+    };
+    // piers between each two adjacent window columns, over the lattice's rows on the face
+    const rowsOn = rowsY.filter((_, r) => colsX.some((__, c) => vote[r * nC + c] !== -2));
+    if (rowsOn.length) for (let c = 0; c + 1 < nC; c++) { const x0 = colsX[c] + wRead / 2, x1 = colsX[c + 1] - wRead / 2; if (x1 - x0 >= P.pierMinW * wRead) out.structure!.piers.push([x0, Math.min(...rowsOn) - hRead / 2, x1, Math.max(...rowsOn) + hRead / 2]); }
+    return out;
 }

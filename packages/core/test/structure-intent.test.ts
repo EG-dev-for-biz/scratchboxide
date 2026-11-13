@@ -168,5 +168,33 @@ describe('structure intent: what the design is, decided region by region', () =>
         const off: IntentFacadeInput = { ...A, frame: { ...A.frame, centroid: [30, 15, 2] } };
         expect(inferStructureIntent([B, off], sym).facades[1].windows).toHaveLength(0);
     });
+
+    it('reads a face top-down as one lattice from its photo period: a coherent blank block is a detail, an isolated contradiction is noise', () => {
+        const xs = Array.from({ length: 10 }, (_, k) => 20 + 40 * k), ys = [50, 100, 150, 200, 250];
+        const key = (x: number, y: number) => `${x},${y}`;
+        // a 3 x 3 block of wall (columns 260-340, rows 150-250) and one isolated site (100, 100) the photo shows as wall
+        const block = new Set(xs.filter(x => x >= 260 && x <= 340).flatMap(x => ys.filter(y => y >= 150).map(y => key(x, y))));
+        const wallAt = new Set([...block, key(100, 100)]);
+        const shown = xs.flatMap(x => ys.filter(y => !wallAt.has(key(x, y))).map(y => [x - 8, y - 10, x + 8, y + 10] as Rect));
+        // the capture read about half the windows, never the block or the isolated site
+        const read = shown.filter((_, i) => i % 2 === 0 || i % 5 === 1);
+        const f = inferStructureIntent([{ facadeId: 1, frame: frame(), rects: read, period: { m: 4, ncc: 0.9 }, evidence: photo(shown) }]).facades[0];
+        expect(f.lattice?.accepted).toBe(true);
+        expect(f.lattice?.bayM).toBeCloseTo(4, 1);
+        expect(f.lattice?.detailSites).toBe(9);
+        expect(f.lattice?.noiseOverridden).toBe(1);
+        // every site but the block's holds a window; the isolated one is laid over its contradiction, and says so
+        expect(f.windows).toHaveLength(50 - 9);
+        expect(f.windows.find(w => Math.abs(w.rect[0] + 8 - 100) < 1 && Math.abs(w.rect[1] + 10 - 100) < 1)?.overridden).toBe(true);
+        for (const k of block) { const [x, y] = k.split(',').map(Number); expect(f.windows.some(w => Math.abs(w.rect[0] + 8 - x) < 1 && Math.abs(w.rect[1] + 10 - y) < 1)).toBe(false); }
+    });
+
+    it('refuses the lattice where the windows read do not sit on the photo\'s period', () => {
+        // three rows of windows 4.4 m apart, each row shifted 1.3 m: folded at the photo's 4 m they spread evenly, no column
+        const irregular: Rect[] = [50, 100, 150].flatMap((y, r) => Array.from({ length: 8 }, (_, k) => 20 + 13 * r + 44 * k).filter(x => x + 8 <= 400).map(x => [x - 8, y - 10, x + 8, y + 10] as Rect));
+        const f = inferStructureIntent([{ facadeId: 1, frame: frame(), rects: irregular, period: { m: 4, ncc: 0.9 } }]).facades[0];
+        expect(f.lattice?.accepted ?? false).toBe(false);
+        expect(f.windows.every(w => w.source !== 'pattern')).toBe(true);
+    });
 });
 

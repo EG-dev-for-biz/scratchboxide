@@ -25,7 +25,22 @@ Before drawing anything, settle:
 - **What evidence exists?** The scan, the textured scan, pipeline K's facade readings (its window fit, facade reader,
   window arrays, wall grammar), the symmetry reading, the measured twin's clean shell.
 
-## 2. Decide how each region is organised: from evidence, never assumed
+## 2. Start from the pattern; make the exception prove itself
+
+A designed facade repeats: repetition is cheap to design and build, exceptions cost. So the default is one lattice
+per face, and the burden of proof is on the exception, not on the pattern:
+- **Propose top-down.** The bay from the photo's period measured over the whole face (pipeline K's `periodM`; on the
+  Empire State Building 5.54 m on 38 of 61 large faces), the windows within a bay from the read windows folded at it,
+  the rows on the building's storey. Window boxes refine the module; they do not have to prove the lattice exists.
+- **Test every site** against the photo (and the scan's depth where it resolves a recess; Google's tiles model the
+  facade as a flat skin, so there depth only says where the face is).
+- **A detail must be coherent:** a run of contradicted sites over two rows or three columns, aligned to the grid,
+  backed by more than one source (or twice the size where only one speaks). Isolated contradictions are capture noise
+  (glare, a smear, a misread) and the pattern overrides them, flagged.
+- **Choose the simplest description that explains the evidence:** the lattice stands only when it explains most of
+  the windows read and overrides little; an irregular face (a crown, a one-off) falls back to the readings below.
+
+## 3. Decide how each region is organised: from evidence, never assumed
 
 Split every face bottom to top into regions where its pattern changes (a base, a shaft, a crown; a blank band is a
 region too). For each region decide, and record the scores that decided it:
@@ -68,7 +83,7 @@ Then across the whole structure:
 - **Strips**: an opening several storeys tall whose panes stack is a column of windows; panes side by side are
   mullions.
 
-## 3. Draw it, and map its materials in the same pixels
+## 4. Draw it, and map its materials in the same pixels
 
 Call `location_building_line_drawing` (style `blueprint`, the default). It runs the reasoning above
 (`structure-intent.ts`) and writes, per view:
@@ -85,7 +100,7 @@ Call `location_building_line_drawing` (style `blueprint`, the default). It runs 
   `structure_intent.json` (each region's decision with its scores, each window's provenance: measured, repeat,
   mirror, twin).
 
-## 4. Report it honestly
+## 5. Report it honestly
 
 - Say how many regions were decided each way and why, how many openings were inferred and from what (repeat, mirror,
   twin; and whether the photo showed a window there or could not tell), how many sites were withheld as wall, and the
