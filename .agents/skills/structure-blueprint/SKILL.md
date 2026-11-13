@@ -55,6 +55,12 @@ Then carry the design as far as the structure goes:
   rows are inferred with the windows: the structure the openings sit in.
 
 Then across the whole structure:
+- **Setback tiers**: the faces of one tier share a pattern (the column pitch, window size and row pitch its repeating
+  bands carry most). A poorly read face takes it when its few read windows sit on it; one whose windows do not is its
+  own design. A face with too few windows to place the pattern is left to the plan's symmetry.
+- **Plan symmetry**: under a plan mirror or rotation that scores high, a poorly read face whose mapped partner
+  coincides with it (same normal, plane and extent) takes the partner's windows: the partner's own reading and its own
+  inferences, never windows other faces lent it.
 - **Twin faces**: two faces the symmetry reading accepted as one transformed into the other (a plan mirror or
   rotation) share their openings only where they agree on what both read; otherwise they are two designs.
 - **Floors**: one storey height and datum for the whole building, from the repeating regions' rows; a region whose

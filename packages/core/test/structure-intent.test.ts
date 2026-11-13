@@ -134,5 +134,39 @@ describe('structure intent: what the design is, decided region by region', () =>
         for (const p of f.structure!.piers) { expect(p[1]).toBeLessThan(15); expect(p[3]).toBeGreaterThan(325); }
         expect(f.structure!.floors.length).toBeGreaterThanOrEqual(5);
     });
+
+    it('lets a poorly read face take its setback tier\'s pattern when its few read windows sit on it', () => {
+        const rows = [50, 100, 150, 200], cols = [60, 100, 140, 180, 220, 260, 300, 340];
+        const rich: IntentFacadeInput = { facadeId: 1, frame: frame(1), rects: grid(cols, rows), tier: 0 };
+        // the same tier's other face: three windows read, on the tier's columns; its photo shows every site but (340, 200), plain wall
+        const shown = grid(cols, rows).filter(r => !(r[0] + 8 === 340 && r[1] + 10 === 200));
+        const poor: IntentFacadeInput = { facadeId: 2, frame: frame(2), rects: grid([100, 220, 300], [100]), tier: 0, evidence: photo(shown) };
+        const it = inferStructureIntent([rich, poor]);
+        const t = it.tiers!.find(x => x.tier === 0)!;
+        expect(t.pitchM).toBeCloseTo(4, 1);
+        const f = it.facades[1], fromTier = f.windows.filter(w => w.source === 'tier');
+        expect(fromTier.length).toBeGreaterThanOrEqual(25);
+        expect(f.windows.some(w => Math.abs(w.rect[0] + 8 - 340) < 2 && Math.abs(w.rect[1] + 10 - 200) < 2)).toBe(false);
+        expect(t.filled[0]).toMatchObject({ facadeId: 2 });
+        expect(t.filled[0].withheld).toBeGreaterThanOrEqual(1);
+    });
+
+    it('fills a face the capture never read from its partner under the plan\'s mirror, and refuses a partner that does not coincide', () => {
+        // two halves of one wall (x 0..20 and 20..40 m, facing +z); the plan mirrors about x = 20
+        const half = (id: number, cx: number): IntentFacadeInput['frame'] => ({ ...frame(id), centroid: [cx, 15, 0], width: 200, orthoSMin: -10 });
+        const B: IntentFacadeInput = { facadeId: 1, frame: half(1, 10), rects: grid([30, 70, 110, 150], [50, 100, 150, 200]) };
+        const unread = photo([], [[0, 400]]);
+        const A: IntentFacadeInput = { facadeId: 2, frame: half(2, 30), rects: [], evidence: { ...unread, W: 400 } };
+        const sym = { transforms: [{ kind: 'mirror', angleDeg: 90, centre: [20, -5], from: 'massing', score: 0.97 }], facades: [], twins: [] } as unknown as Parameters<typeof inferStructureIntent>[1];
+        const it = inferStructureIntent([B, A], sym);
+        const plan = it.facades[1].windows.filter(w => w.source === 'plan');
+        expect(plan).toHaveLength(16);
+        // B's window at x 22..38 px lands at 200 - 38 .. 200 - 22 on A
+        expect(plan.some(w => Math.abs(w.rect[0] - 162) < 0.01 && Math.abs(w.rect[2] - 178) < 0.01)).toBe(true);
+        expect(it.planFills).toEqual([expect.objectContaining({ to: 2, from: 1, added: 16 })]);
+        // the same partner a metre and a half out of the wall's plane is not the face's image
+        const off: IntentFacadeInput = { ...A, frame: { ...A.frame, centroid: [30, 15, 2] } };
+        expect(inferStructureIntent([B, off], sym).facades[1].windows).toHaveLength(0);
+    });
 });
 

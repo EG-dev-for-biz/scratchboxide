@@ -42,6 +42,13 @@
  *     photo does not read wall.
  *  8. The frame. Each repeating band's piers (between each two columns, merged down a shaft through its spandrels) and
  *     floor lines (between its rows) are inferred with the windows: the structure the openings sit in.
+ *  9. The setback tier. The faces of one tier (pipeline K's wall grammar, else faces of one top height) share a
+ *     pattern: the column pitch its repeating bands carry most, with their window size and row pitch. A face holding
+ *     under poorShare of the sites that pattern lays over it takes the pattern, phased to its own read windows, only
+ *     when those windows sit on it; a face whose windows do not is its own design (and is reported as such).
+ * 10. The plan's symmetry. Under a plan mirror or rotation scoring planScore or more, a poorly read face whose mapped
+ *     partner coincides with it (normal, plane, extent) takes the partner's windows (its own reading and its own rules'
+ *     inferences, never what other faces lent it). Tier and plan windows are vetted by the face's photo like any other.
  * Every element carries its provenance (measured: read by the capture; repeat, mirror, twin: inferred, with the region's
  * decision and score, and what the photo said at its site) and every region its decision with the scores that made it.
  */
@@ -59,9 +66,11 @@ export interface IntentFacadeInput {
     panes?: Rect[];
     /** The facade photo's luma and masks: when given, an empty site is filled only where the photo does not read it as wall (see SiteEvidence). */
     evidence?: FacadeEvidence;
+    /** The setback tier the facade belongs to (pipeline K's wall grammar); absent: facades are grouped by their top height. */
+    tier?: number;
 }
 
-export type IntentSource = 'measured' | 'repeat' | 'mirror' | 'twin';
+export type IntentSource = 'measured' | 'repeat' | 'mirror' | 'twin' | 'tier' | 'plan';
 export type RegionDecision = 'repeat' | 'symmetric' | 'neither' | 'blank';
 
 export interface IntentWindow { rect: Rect; panes: number; source: IntentSource; family: number; region: number; /** For an inferred window: what the photo said at its site (window: it shows one; unread or occluded: it could not tell). */ evidence?: SiteEvidence }
@@ -84,7 +93,9 @@ export interface IntentFacade {
     /** Whether the photo's evidence judged the empty sites, and what it did: sites withheld as wall, columns carried toward the wall's ends, windows laid through gaps between matching bands. */
     evidence?: { used: boolean; withheld: number; extended: number; stacked: number };
 }
-export interface StructureIntent { version: string; params: IntentParams; facades: IntentFacade[]; /** The building's storey (world y, m): one floor-to-floor height and a datum every repeating band's rows sit on when they agree. */ storey?: { pitchM: number; datumY: number; bands: number; snapped: number }; twins: Array<{ a: number; b: number; agree: number; used: boolean; reason: string }> }
+export interface TierPattern { tier: number; facades: number[]; pitchM: number; windowM: [number, number]; rowPitchM: number; yRange: [number, number]; bands: number; filled: Array<{ facadeId: number; added: number; withheld: number }>; skipped: Array<{ facadeId: number; reason: string }> }
+export interface PlanFill { to: number; from: number; transform: string; score: number; added: number; withheld: number }
+export interface StructureIntent { version: string; params: IntentParams; facades: IntentFacade[]; /** Each setback tier's pattern (the consensus of its repeating bands) and the poorly read faces that took it. */ tiers?: TierPattern[]; /** Faces filled from their partner under the plan's mirror or rotation. */ planFills?: PlanFill[]; /** The building's storey (world y, m): one floor-to-floor height and a datum every repeating band's rows sit on when they agree. */ storey?: { pitchM: number; datumY: number; bands: number; snapped: number }; twins: Array<{ a: number; b: number; agree: number; used: boolean; reason: string }> }
 
 export const STRUCTURE_INTENT_PARAMS = {
     /** Window centres within this share of the median window's size are one column (or row). */
@@ -110,10 +121,14 @@ export const STRUCTURE_INTENT_PARAMS = {
     /** Stacking: two bands are one shaft when their column pitch agrees within stackPitchTol, their phase within stackPhaseTol of a pitch and their window size within stackSizeTol; at most stackMaxRows rows are laid between. */
     stackPitchTol: 0.05, stackPhaseTol: 0.15, stackSizeTol: 0.2, stackMaxRows: 40,
     /** A pier is drawn between two columns at least pierMinW of a window's width apart. */
-    pierMinW: 0.2
+    pierMinW: 0.2,
+    /** Tier sharing: a tier's pattern is the column pitch most of its repeating bands' windows carry (within tierPitchTol); a face holding under poorShare of the sites that pattern lays over it takes the pattern when at least tierOnShare of its read windows (tierMinRead or more) sit on it and their width is within tierSizeTol of the tier's. Faces group by their top height within tierTopM when no tier is given. */
+    tierPitchTol: 0.08, poorShare: 0.5, tierOnShare: 0.6, tierMinRead: 3, tierSizeTol: 0.3, tierTopM: 3,
+    /** Plan symmetry: a transform of the plan scoring planScore or more maps a well read face (planRichRatio times the windows, at least planMinWindows) onto a poorly read one when the mapped face's normal agrees (planNormalCos), its plane lies within planOffsetM and its extent overlaps the face's by planExtentIoU. */
+    planScore: 0.9, planRichRatio: 2, planMinWindows: 10, planNormalCos: 0.95, planOffsetM: 1.5, planExtentIoU: 0.7
 };
 export type IntentParams = typeof STRUCTURE_INTENT_PARAMS;
-export const STRUCTURE_INTENT_VERSION = 'structure-intent/2';
+export const STRUCTURE_INTENT_VERSION = 'structure-intent/3';
 
 const med = (v: number[]) => { const a = [...v].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
 const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / Math.max(1, v.length);
@@ -209,6 +224,8 @@ export class EvidenceReader {
     private readonly W: number; private readonly H: number;
     private readonly sL: Float64Array; private readonly sV: Float64Array; private readonly sO: Float64Array; private readonly sF: Float64Array;
     private sign = 1; private typ = 0;
+    /** Whether learn() found what a window looks like here. */
+    learned = false;
     constructor(e: FacadeEvidence, private readonly P: IntentParams) {
         this.W = e.W; this.H = e.H;
         const n = (e.W + 1) * (e.H + 1);
@@ -245,7 +262,16 @@ export class EvidenceReader {
         const pos = c.filter(v => v > 0).length;
         this.sign = pos >= c.length / 2 ? 1 : -1;
         this.typ = med(c.filter(v => Math.sign(v) === this.sign).map(Math.abs));
-        return this.typ >= this.P.siteMinContrast && Math.max(pos, c.length - pos) >= 0.65 * c.length;
+        this.learned = this.typ >= this.P.siteMinContrast && Math.max(pos, c.length - pos) >= 0.65 * c.length;
+        return this.learned;
+    }
+    /** What the photo allows at a site: with a learned window, its reading; without one, only whether the photo saw the site at all ('seen': it did, and cannot say whether it is a window, so the site is closed). */
+    vet(r: number[]): SiteEvidence | 'seen' {
+        if (this.learned) return this.site(r);
+        const a = Math.max(1, this.area(r));
+        if (this.sum(this.sO, r) >= 0.5 * a) return 'occluded';
+        if (this.sum(this.sV, r) < 0.5 * a || this.sum(this.sF, r) >= 0.5 * a) return 'unread';
+        return 'seen';
     }
     site(r: number[]): SiteEvidence {
         const a = Math.max(1, this.area(r));
@@ -260,12 +286,12 @@ export class EvidenceReader {
 /** One repeating band's lattice as the frame and the stacking read it. */
 interface BandLattice { region: number; family: number; pitch: number; phase: number; first: number; last: number; ys: number[]; rowPitch?: number; bw: number; bh: number; pn: number }
 
-function infer(fc: IntentFacadeInput, axisPx: number | undefined, P: IntentParams, storey?: { pitchM: number; datumY: number }, onSnap?: () => void): IntentFacade {
+function infer(fc: IntentFacadeInput, axisPx: number | undefined, P: IntentParams, storey?: { pitchM: number; datumY: number }, onSnap?: () => void, reader?: EvidenceReader): IntentFacade {
     const R = splitStrips(fc.rects, fc.panes, P);
     const out: IntentFacade = { facadeId: fc.facadeId, regions: [], windows: [], families: [], twinsFrom: [], structure: { piers: [], floors: [] }, evidence: { used: false, withheld: 0, extended: 0, stacked: 0 } };
     if (!R.length) { out.regions.push({ y0: 0, y1: fc.frame.height, decision: 'blank', scores: { columns: 0, rows: 0, mirror: 0 }, readWindows: 0, added: 0, reason: 'no windows read on this facade: a blank wall, or a wall the capture never resolved; nothing inferred' }); return out; }
     // the photo's evidence: what a window looks like here, learned from the windows read; without it every empty site is unread
-    const ev = fc.evidence ? new EvidenceReader(fc.evidence, P) : undefined;
+    const ev = reader ?? (fc.evidence ? new EvidenceReader(fc.evidence, P) : undefined);
     const useEv = !!ev && ev.learn(R);
     out.evidence!.used = useEv;
     const siteOf = (r: Rect): SiteEvidence => (useEv ? ev!.site(r) : 'unread');
@@ -442,6 +468,23 @@ function planMatrix(t: PlanTransform): { c: [number, number]; m: [number, number
     return { c: t.centre, m: t.kind === 'mirror' ? [Math.cos(r), Math.sin(r), Math.sin(r), -Math.cos(r)] : [Math.cos(r), -Math.sin(r), Math.sin(r), Math.cos(r)] };
 }
 
+/** Facade `from`'s pixels mapped onto facade `to`'s through the plan transform (and its shift); inverse: the transform's inverse. Also the transform's linear part, for normals. */
+function planMap(from: IntentFacadeInput, to: IntentFacadeInput, t: PlanTransform, shift: [number, number], inverse: boolean): { map: (x: number, y: number) => [number, number]; lin: [number, number, number, number]; world: (p: number[]) => number[] } {
+    const { c, m } = planMatrix(t);
+    let [a, b, cc, d] = m;
+    if (inverse) { const det = a * d - b * cc; [a, b, cc, d] = [d / det, -b / det, -cc / det, a / det]; }
+    const F = from.frame, T = to.frame;
+    const world = (p: number[]) => { const qx = p[0] - c[0], qz = p[2] - c[1]; return [c[0] + a * qx + b * qz, p[1], c[1] + cc * qx + d * qz]; };
+    const map = (x: number, y: number): [number, number] => {
+        const s0 = F.orthoSMin + x * F.pixel, tt = F.orthoTMax - y * F.pixel;
+        const q = world([F.centroid[0] + s0 * F.axisS[0] + tt * F.axisT[0], F.centroid[1] + s0 * F.axisS[1] + tt * F.axisT[1], F.centroid[2] + s0 * F.axisS[2] + tt * F.axisT[2]]);
+        const v = [q[0] - T.centroid[0], q[1] - T.centroid[1], q[2] - T.centroid[2]];
+        const sb = v[0] * T.axisS[0] + v[1] * T.axisS[1] + v[2] * T.axisS[2] + (inverse ? -shift[0] : shift[0]), tb = v[0] * T.axisT[0] + v[1] * T.axisT[1] + v[2] * T.axisT[2] + (inverse ? -shift[1] : shift[1]);
+        return [(sb - T.orthoSMin) / T.pixel, (T.orthoTMax - tb) / T.pixel];
+    };
+    return { map, lin: [a, b, cc, d], world };
+}
+
 /** The windows of facade `from` carried onto facade `to` through the transform (and its shift), in `to`'s pixels; inverse: `to` -> `from` direction of the transform. */
 function carry(rects: Rect[], from: IntentFacadeInput, to: IntentFacadeInput, t: PlanTransform, shift: [number, number], inverse: boolean): Rect[] {
     const { c, m } = planMatrix(t);
@@ -467,8 +510,10 @@ export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: Sy
         const rd = symmetry?.facades.find(f => f.facadeId === fc.facadeId);
         return rd && rd.detected && !rd.periodic && rd.axisS !== undefined && (rd.ncc ?? 0) >= P.facadeAxisNcc ? (rd.axisS - fc.frame.orthoSMin) / fc.frame.pixel : undefined;
     };
+    // each facade's photo evidence, read once
+    const readers = new Map(facades.filter(fc => fc.evidence).map(fc => [fc.facadeId, new EvidenceReader(fc.evidence!, P)]));
     // first pass: each facade alone; its repeating bands' rows give the building's storey; second pass: those bands on the building's floors
-    const first = facades.map(fc => infer(fc, axisOf(fc), P));
+    const first = facades.map(fc => infer(fc, axisOf(fc), P, undefined, undefined, readers.get(fc.facadeId)));
     const rowsSeen = first.flatMap((fi, k) => fi.regions.filter(r => r.decision === 'repeat' && r.pitchPx && r.pitchPx[1] > 0).map(r => {
         const f = facades[k].frame, pitchM = r.pitchPx![1] * f.pixel;
         const ys = fi.windows.filter(w => fi.regions[w.region] === r).map(w => rowToY(f, (w.rect[1] + w.rect[3]) / 2));
@@ -476,7 +521,7 @@ export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: Sy
     }));
     const st = buildingStorey(rowsSeen, P.storeyTol);
     let snapped = 0;
-    const intent: StructureIntent = { version: STRUCTURE_INTENT_VERSION, params: P, facades: st ? facades.map(fc => infer(fc, axisOf(fc), P, st, () => snapped++)) : first, twins: [] };
+    const intent: StructureIntent = { version: STRUCTURE_INTENT_VERSION, params: P, facades: st ? facades.map(fc => infer(fc, axisOf(fc), P, st, () => snapped++, readers.get(fc.facadeId))) : first, twins: [] };
     if (st) intent.storey = { ...st, snapped };
     const intentOf = new Map(intent.facades.map(f => [f.facadeId, f]));
     // across facades: accepted twins that agree on what both read share their windows
@@ -500,5 +545,129 @@ export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: Sy
             if (n && !I.twinsFrom.includes(src)) I.twinsFrom.push(src);
         }
     }
+    shareTiers(intent, facades, readers, st, P);
+    fillByPlan(intent, facades, readers, symmetry, P);
     return intent;
+}
+
+/** Lay windows on a facade from outside its own reading: each site vetted by its photo (a site read as wall, or seen without a learned window, is withheld). */
+function layOn(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceReader | undefined, sites: Rect[], source: IntentSource, family: number, panes: number): { added: number; withheld: number } {
+    let added = 0, withheld = 0;
+    for (const r of sites) {
+        if (r[0] < 0 || r[1] < 0 || r[2] > fc.frame.width || r[3] > fc.frame.height) continue;
+        if (I.windows.some(w => rectIoU(w.rect, r) > 0.1)) continue;
+        const e = reader ? reader.vet(r) : 'unread';
+        if (e === 'wall' || e === 'seen') { withheld++; continue; }
+        I.windows.push({ rect: r, panes, source, family, region: -1, evidence: e });
+        added++;
+    }
+    if (I.evidence) I.evidence.withheld += withheld;
+    return { added, withheld };
+}
+
+/** The sites a facade's own windows and its full extent would hold under a lattice (centre spacing pitchPx across, rows at rowsPx). */
+const latticeSites = (fc: IntentFacadeInput, phasePx: number, pitchPx: number, rowsPx: number[], w: number, h: number, edge: number): Rect[] => {
+    const out: Rect[] = [];
+    for (let k = Math.ceil((edge + w / 2 - phasePx) / pitchPx); phasePx + k * pitchPx + w / 2 <= fc.frame.width - edge; k++) {
+        const cx = phasePx + k * pitchPx;
+        for (const cy of rowsPx) out.push([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]);
+    }
+    return out;
+};
+const circularPhase = (pos: number[], pitch: number) => { let cx = 0, cy = 0; for (const p of pos) { const a = (2 * Math.PI * p) / pitch; cx += Math.cos(a); cy += Math.sin(a); } return ((((Math.atan2(cy, cx) / (2 * Math.PI)) * pitch) % pitch) + pitch) % pitch; };
+
+/**
+ * Tier sharing: the faces of one setback tier share a pattern. The tier's is the column pitch (m) its repeating bands'
+ * windows carry most, with their window size and row pitch; a face holding under poorShare of the sites that pattern lays
+ * over it takes the pattern when its own read windows sit on it (the pattern's phase fitted to them), each site vetted
+ * by the face's photo.
+ */
+function shareTiers(intent: StructureIntent, facades: IntentFacadeInput[], readers: Map<number, EvidenceReader>, storey: { pitchM: number; datumY: number } | undefined, P: IntentParams): void {
+    const byId = new Map(facades.map(f => [f.facadeId, f])), intentOf = new Map(intent.facades.map(f => [f.facadeId, f]));
+    // the tiers: the wall grammar's, else facades grouped by their top height
+    const tops = facades.map(f => ({ id: f.facadeId, top: rowToY(f.frame, 0) })).sort((a, b) => a.top - b.top);
+    const topTier = new Map<number, number>(); let tk = -1, last = -Infinity;
+    for (const t of tops) { if (t.top - last > P.tierTopM) tk++; topTier.set(t.id, 1000 + tk); last = t.top; }
+    const tierOf = (f: IntentFacadeInput) => f.tier ?? topTier.get(f.facadeId)!;
+    const tiers = new Map<number, IntentFacadeInput[]>();
+    for (const f of facades) { const k = tierOf(f); (tiers.get(k) ?? tiers.set(k, []).get(k)!).push(f); }
+    intent.tiers = [];
+    for (const [tier, members] of tiers) {
+        // the pattern: every repeating band of the tier's faces, in metres, weighted by the windows it read
+        const bands = members.flatMap(f => { const I = intentOf.get(f.facadeId)!; return I.regions.map((r, k) => ({ r, k, f, I })).filter(x => x.r.decision === 'repeat' && x.r.pitchPx && x.r.readWindows >= P.tierMinRead); })
+            .map(x => ({ pitchM: x.r.pitchPx![0] * x.f.frame.pixel, rowM: x.r.pitchPx![1] * x.f.frame.pixel, wM: x.I.families[x.k].w * x.f.frame.pixel, hM: x.I.families[x.k].h * x.f.frame.pixel, w: x.r.readWindows, y: [rowToY(x.f.frame, x.r.y1), rowToY(x.f.frame, x.r.y0)] as [number, number] }));
+        if (!bands.length) continue;
+        let best: typeof bands = [], bw = 0;
+        for (const b of bands) { const near = bands.filter(o => Math.abs(o.pitchM - b.pitchM) <= P.tierPitchTol * b.pitchM), w = near.reduce((a, o) => a + o.w, 0); if (w > bw) { bw = w; best = near; } }
+        const wmed = (v: Array<[number, number]>) => { const a = [...v].sort((p, q) => p[0] - q[0]), tot = a.reduce((s2, x) => s2 + x[1], 0); let acc = 0; for (const x of a) { acc += x[1]; if (acc >= tot / 2) return x[0]; } return a[a.length - 1]?.[0] ?? 0; };
+        const pitchM = best.reduce((a, o) => a + o.pitchM * o.w, 0) / bw, wM = wmed(best.map(o => [o.wM, o.w])), hM = wmed(best.map(o => [o.hM, o.w]));
+        const ownRow = wmed(best.filter(o => o.rowM > 0).map(o => [o.rowM, o.w]));
+        const rowPitchM = storey && (!ownRow || Math.abs(ownRow - storey.pitchM) <= P.storeyTol * storey.pitchM) ? storey.pitchM : ownRow;
+        const yRange: [number, number] = [Math.min(...best.map(o => o.y[0])), Math.max(...best.map(o => o.y[1]))];
+        const pat: TierPattern = { tier, facades: members.map(f => f.facadeId), pitchM, windowM: [wM, hM], rowPitchM, yRange, bands: best.length, filled: [], skipped: [] };
+        intent.tiers.push(pat);
+        if (!(rowPitchM > 0)) continue;
+        const datumY = storey && rowPitchM === storey.pitchM ? storey.datumY : circularPhase(members.flatMap(f => intentOf.get(f.facadeId)!.windows.filter(w => w.source === 'measured').map(w => rowToY(f.frame, (w.rect[1] + w.rect[3]) / 2))), rowPitchM);
+        for (const f of members) {
+            const I = intentOf.get(f.facadeId)!, px = f.frame.pixel, pitchPx = pitchM / px, w = wM / px, h = hM / px;
+            // the rows the tier's pattern spans on this face
+            const rowsPx: number[] = [];
+            for (let k = Math.ceil((yRange[0] - datumY) / rowPitchM); datumY + k * rowPitchM <= yRange[1]; k++) { const y = yToRow(f.frame, datumY + k * rowPitchM); if (y - h / 2 >= 0 && y + h / 2 <= f.frame.height) rowsPx.push(y); }
+            const expected = Math.max(0, Math.floor((f.frame.width - w) / pitchPx) + 1) * rowsPx.length;
+            if (!expected) continue;
+            const own = I.windows.filter(x => x.source !== 'twin');
+            if (own.length >= P.poorShare * expected) continue;
+            const read = splitStrips(f.rects, f.panes, P);
+            if (read.length < P.tierMinRead) { pat.skipped.push({ facadeId: f.facadeId, reason: `only ${read.length} windows read: no phase to lay the tier's pattern at (left to the plan's symmetry)` }); continue; }
+            const xs = read.map(r => (r[0] + r[2]) / 2), phase = circularPhase(xs, pitchPx);
+            const on = xs.filter(x => { const d = Math.abs(((x - phase) / pitchPx) - Math.round((x - phase) / pitchPx)); return d <= 0.2; }).length / xs.length;
+            const wRead = med(read.map(r => r[2] - r[0]));
+            if (on < P.tierOnShare || Math.abs(wRead - w) > P.tierSizeTol * w) { pat.skipped.push({ facadeId: f.facadeId, reason: `its windows do not sit on the tier's pattern (${Math.round(on * 100)}% on its columns, width ${(wRead * px).toFixed(2)} m against ${wM.toFixed(2)} m): its own design` }); continue; }
+            const fam = I.families.length; I.families.push({ id: fam, w, h, panes: 1 });
+            const r = layOn(I, f, readers.get(f.facadeId), latticeSites(f, phase, pitchPx, rowsPx, w, h, P.edgeMarginW * w), 'tier', fam, 1);
+            if (r.added || r.withheld) pat.filled.push({ facadeId: f.facadeId, ...r });
+        }
+    }
+}
+
+/**
+ * Plan symmetry: a face the capture barely read is the image of its partner under the plan's mirror or rotation, when
+ * the partner was read well and the mapped partner coincides with the face (normal, plane, extent). The partner's
+ * windows (its own reading and what its own rules inferred, not what other faces lent it) are carried over, each site
+ * vetted by the face's photo.
+ */
+function fillByPlan(intent: StructureIntent, facades: IntentFacadeInput[], readers: Map<number, EvidenceReader>, symmetry: SymmetryReport | undefined, P: IntentParams): void {
+    const ts = (symmetry?.transforms ?? []).filter(t => t.score >= P.planScore);
+    if (!ts.length) return;
+    const intentOf = new Map(intent.facades.map(f => [f.facadeId, f]));
+    const ownWindows = (I: IntentFacade) => I.windows.filter(w => w.source === 'measured' || w.source === 'repeat' || w.source === 'mirror');
+    intent.planFills = [];
+    for (const A of facades) {
+        const IA = intentOf.get(A.facadeId)!;
+        let best: { B: IntentFacadeInput; t: PlanTransform; inv: boolean; n: number } | undefined;
+        for (const B of facades) {
+            if (B === A) continue;
+            const IB = intentOf.get(B.facadeId)!, n = ownWindows(IB).length;
+            if (n < P.planMinWindows || n < P.planRichRatio * Math.max(1, IA.windows.length)) continue;
+            for (const t of ts) for (const inv of t.kind === 'mirror' ? [false] : [false, true]) {
+                const pm = planMap(B, A, t, [0, 0], inv);
+                // the mapped partner's normal, plane and extent against the face's
+                const nB = B.frame.normal, nm = [pm.lin[0] * nB[0] + pm.lin[1] * nB[2], nB[1], pm.lin[2] * nB[0] + pm.lin[3] * nB[2]];
+                if (nm[0] * A.frame.normal[0] + nm[1] * A.frame.normal[1] + nm[2] * A.frame.normal[2] < P.planNormalCos) continue;
+                const cB = pm.world(B.frame.centroid), off = Math.abs((cB[0] - A.frame.centroid[0]) * A.frame.normal[0] + (cB[1] - A.frame.centroid[1]) * A.frame.normal[1] + (cB[2] - A.frame.centroid[2]) * A.frame.normal[2]);
+                if (off > P.planOffsetM) continue;
+                const cs = [pm.map(0, 0), pm.map(B.frame.width, 0), pm.map(0, B.frame.height), pm.map(B.frame.width, B.frame.height)];
+                const box = [Math.min(...cs.map(q => q[0])), Math.min(...cs.map(q => q[1])), Math.max(...cs.map(q => q[0])), Math.max(...cs.map(q => q[1]))];
+                if (rectIoU(box, [0, 0, A.frame.width, A.frame.height]) < P.planExtentIoU) continue;
+                if (!best || n > best.n) best = { B, t, inv, n };
+            }
+        }
+        if (!best) continue;
+        const IB = intentOf.get(best.B.facadeId)!, pm = planMap(best.B, A, best.t, [0, 0], best.inv);
+        const sites = ownWindows(IB).map(w => { const p = pm.map(w.rect[0], w.rect[1]), q = pm.map(w.rect[2], w.rect[3]); return [Math.min(p[0], q[0]), Math.min(p[1], q[1]), Math.max(p[0], q[0]), Math.max(p[1], q[1])] as Rect; });
+        const fam = IA.families.length, wMed = med(sites.map(r => r[2] - r[0])), hMed = med(sites.map(r => r[3] - r[1]));
+        IA.families.push({ id: fam, w: wMed, h: hMed, panes: 1 });
+        const r = layOn(IA, A, readers.get(A.facadeId), sites, 'plan', fam, 1);
+        intent.planFills.push({ to: A.facadeId, from: best.B.facadeId, transform: `${best.t.kind} ${best.t.angleDeg.toFixed(1)} deg${best.inv ? ' (inverse)' : ''}`, score: best.t.score, ...r });
+    }
 }
