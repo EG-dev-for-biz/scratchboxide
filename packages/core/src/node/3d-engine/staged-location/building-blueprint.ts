@@ -27,6 +27,9 @@
  *    height above the lowest point. Measured.
  *  - detail: with the textured scan, the photo's strongest edges as the lightest hairlines under everything (the
  *    ornament, frames and texture no reading holds). Photo-inferred.
+ * The design, not the evidence: with snapToModule each facade's windows are redrawn on its module (one width per column,
+ * one height per row, on their clusters' lines, mullions evenly split), and with `structure` (the measured twin's clean
+ * shell) the outline is drawn from that geometry instead of the scan's folds. Every sheet is also written as SVG.
  * Where several facade readings cover one stretch of wall, each window and bay is drawn once: facades nearest the viewer
  * first, then those with the most windows, and an element landing mostly on one already drawn is skipped.
  * Line weights follow the hierarchy an architect draws with: the silhouette heaviest, the structure (bays, ledges)
@@ -37,6 +40,7 @@ import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { drawText } from './photo-match-eval';
 import { CARDINAL_VIEWS, classifyEdges, FACING_EPS, LINE_DRAWING_PARAMS, photoEdges, turned, wallAzimuthDeg, weld, type LineDrawingView, type Mesh, type PlaneOrthoFrame } from './building-line-drawing';
 import type { TileTriangles } from './tile-texture-transfer';
+import { encodePng } from './png-encode';
 import type { SymmetryReport } from './pipeline-k/symmetry';
 
 type Rect = [number, number, number, number];
@@ -51,6 +55,10 @@ export interface BlueprintInputs {
     facades?: BlueprintFacade[];
     walls?: BlueprintWall[];
     symmetry?: SymmetryReport;
+    /** Clean geometry of the building (the measured twin's shell: massing, slender top, ledge profiles, roof detail): the outline and the depth test are drawn from it in place of the raw scan, so the lines are the design's, not the scan's folds. Same frame as the scan. */
+    structure?: Float32Array | Float64Array;
+    /** With `structure`: geometry that closes its openings (the twin's panes and reveals), added to the depth test only, so an inferred window lies on its pane rather than over a hole; never drawn as outline. */
+    structureFill?: Float32Array | Float64Array;
     /** The textured scan: its photo's strongest edges drawn as the lightest layer, under the constructed lines (detail the readings do not hold: ornament, frames, texture). Photo-inferred. */
     photo?: TileTriangles;
     title?: string;
@@ -77,6 +85,8 @@ export const BLUEPRINT_PARAMS = {
     spandrelMinM: 0.4, spandrelMaxM: 3, spandrelInsetM: 0.15,
     /** A horizontal outline run of ledgeMinM or more is drawn doubled, its second line ledgeM below. */
     ledgeMinM: 2, ledgeM: 0.35,
+    /** Each facade's windows snapped to its module: columns and rows clustered (centres within moduleTol of the median window's size), every window at its column's median width and row's median height on the clusters' lines, mullions as even splits at the column's median pane count. */
+    snapToModule: true, moduleTol: 0.35,
     /** 'ink': black on white; 'blueprint': white on blue. */
     scheme: 'ink' as 'ink' | 'blueprint',
     gridM: 10, marginPx: 150, titlePx: 170
@@ -95,11 +105,11 @@ export interface BlueprintReport {
     ms: number;
 }
 
-export const BLUEPRINT_VERSION = 'building-blueprint/3';
+export const BLUEPRINT_VERSION = 'building-blueprint/4';
 
 const SCHEMES = { ink: { bg: [255, 255, 255] as Vec3, ink: [16, 16, 16] as Vec3 }, blueprint: { bg: [24, 60, 116] as Vec3, ink: [236, 243, 255] as Vec3 } };
 
-interface Sheet { W: number; H: number; rgb: Uint8Array; inkC: Vec3 }
+interface Sheet { W: number; H: number; rgb: Uint8Array; inkC: Vec3; vec: string[] }
 function ink(c: Sheet, x: number, y: number, a: number, r = 0): void {
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
         const xi = Math.round(x) + dx, yi = Math.round(y) + dy;
@@ -109,7 +119,13 @@ function ink(c: Sheet, x: number, y: number, a: number, r = 0): void {
     }
 }
 /** A line of weight r (a square brush), optionally dashed ([on, off] or [on, off, dot, off] for a centre line). */
+/** The same stroke as a vector: a brush of radius r is 2r + 1 pixels wide. */
+function vline(c: Sheet, x0: number, y0: number, x1: number, y1: number, a: number, r = 0, pattern?: number[]): void {
+    const f = (v: number) => (Math.round(v * 10) / 10).toString();
+    c.vec.push(`<line x1="${f(x0)}" y1="${f(y0)}" x2="${f(x1)}" y2="${f(y1)}" stroke-width="${2 * r + 1}"${a < 0.999 ? ` stroke-opacity="${Math.round(a * 100) / 100}"` : ''}${pattern ? ` stroke-dasharray="${pattern.join(' ')}"` : ''}/>`);
+}
 function line(c: Sheet, x0: number, y0: number, x1: number, y1: number, a: number, r = 0, pattern?: number[]): void {
+    vline(c, x0, y0, x1, y1, a, r, pattern);
     const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
     const period = pattern ? pattern.reduce((p, q) => p + q, 0) : 0;
     for (let i = 0; i <= n; i++) {
@@ -117,7 +133,11 @@ function line(c: Sheet, x0: number, y0: number, x1: number, y1: number, a: numbe
         ink(c, x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n, a, r);
     }
 }
-function text(c: Sheet, x: number, y: number, s: string, scale: number): void { drawText(c.rgb, c.W, c.H, Math.round(x), Math.round(y), s, scale, c.inkC); }
+function text(c: Sheet, x: number, y: number, s: string, scale: number): void {
+    drawText(c.rgb, c.W, c.H, Math.round(x), Math.round(y), s, scale, c.inkC);
+    const esc = s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    c.vec.push(`<text x="${Math.round(x)}" y="${Math.round(y + 7 * scale)}" font-size="${8 * scale}" stroke="none">${esc}</text>`);
+}
 const textW = (s: string, scale: number) => s.length * 6 * scale;
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const iou = (a: number[], b: number[]) => { const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])), i = ix * iy; return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i || 1); };
@@ -149,7 +169,50 @@ function depthBuffer(m: Mesh, view: LineDrawingView, W: number, H: number, col: 
     return buf;
 }
 
-function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number): { png: Sheet; stats: BlueprintReport['views'][number] } {
+/**
+ * A facade's windows on its module: their centres clustered into columns and rows (a gap under moduleTol of the median
+ * window's width or height starts a new one), each window redrawn at its column's median width and its row's median
+ * height on the clusters' mean lines; two windows landing on one site are one. Each window's pane count is its column's
+ * median (the panes the reading split it into, those lying 60% inside it).
+ */
+function moduleOf(fc: BlueprintFacade, tol = BLUEPRINT_PARAMS.moduleTol): { rects: Rect[]; panes: number[] } {
+    const R = fc.rects, med = (v: number[]) => { const a = [...v].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
+    if (!R.length) return { rects: [], panes: [] };
+    const mw = med(R.map(r => r[2] - r[0])), mh = med(R.map(r => r[3] - r[1]));
+    const cluster = (vals: number[], gap: number): number[] => {
+        const order = vals.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0]), id = new Array<number>(vals.length);
+        let k = -1, last = -Infinity;
+        for (const [v, i] of order) { if (v - last > gap) k++; id[i] = k; last = v; }
+        return id;
+    };
+    const colOf = cluster(R.map(r => (r[0] + r[2]) / 2), tol * mw), rowOf = cluster(R.map(r => (r[1] + r[3]) / 2), tol * mh);
+    const nCols = Math.max(...colOf) + 1, nRows = Math.max(...rowOf) + 1;
+    const colX = Array.from({ length: nCols }, (_, c) => { const v = R.filter((_, i) => colOf[i] === c).map(r => (r[0] + r[2]) / 2); return v.reduce((a, b) => a + b, 0) / v.length; });
+    const colW = Array.from({ length: nCols }, (_, c) => med(R.filter((_, i) => colOf[i] === c).map(r => r[2] - r[0])));
+    const rowY = Array.from({ length: nRows }, (_, q) => { const v = R.filter((_, i) => rowOf[i] === q).map(r => (r[1] + r[3]) / 2); return v.reduce((a, b) => a + b, 0) / v.length; });
+    const rowH = Array.from({ length: nRows }, (_, q) => med(R.filter((_, i) => rowOf[i] === q).map(r => r[3] - r[1])));
+    const panesIn = (r: Rect) => (fc.panes ?? []).filter(p => { const ix = Math.max(0, Math.min(r[2], p[2]) - Math.max(r[0], p[0])), iy = Math.max(0, Math.min(r[3], p[3]) - Math.max(r[1], p[1])); return ix * iy >= 0.6 * Math.max(1e-9, (p[2] - p[0]) * (p[3] - p[1])); }).length;
+    const colPanes = Array.from({ length: nCols }, (_, c) => Math.max(1, med(R.filter((_, i) => colOf[i] === c).map(panesIn))));
+    const seen = new Set<string>(), rects: Rect[] = [], panes: number[] = [];
+    R.forEach((_, i) => {
+        const c = colOf[i], q = rowOf[i], key = `${c},${q}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        rects.push([colX[c] - colW[c] / 2, rowY[q] - rowH[q] / 2, colX[c] + colW[c] / 2, rowY[q] + rowH[q] / 2]);
+        panes.push(colPanes[c]);
+    });
+    return { rects, panes };
+}
+
+/** A sheet's vectors as an SVG document: the background, then every stroke and label in the ink colour. */
+function svgOf(sheet: Sheet, bg: Vec3): string {
+    const rgb = (c: Vec3) => `rgb(${c[0]},${c[1]},${c[2]})`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.W}" height="${sheet.H}" viewBox="0 0 ${sheet.W} ${sheet.H}">`
+        + `<rect width="100%" height="100%" fill="${rgb(bg)}"/>`
+        + `<g stroke="${rgb(sheet.inkC)}" fill="${rgb(sheet.inkC)}" stroke-linecap="square" font-family="monospace">${sheet.vec.join('')}</g></svg>`;
+}
+
+function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number, depthMesh: Mesh = m): { png: Sheet; stats: BlueprintReport['views'][number] } {
     const { forward, right, up } = view, isPlan = Math.abs(forward[1]) > 0.9, sc = SCHEMES[P.scheme];
     const u = (i: number) => m.P[3 * i] * right[0] + m.P[3 * i + 1] * right[1] + m.P[3 * i + 2] * right[2];
     const v = (i: number) => m.P[3 * i] * up[0] + m.P[3 * i + 1] * up[1] + m.P[3 * i + 2] * up[2];
@@ -161,7 +224,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     if (long / pixelM > P.maxDimPx) pixelM = long / P.maxDimPx;
     const dw = Math.ceil((uMax - uMin) / pixelM) + 1, dh = Math.ceil((vMax - vMin) / pixelM) + 1;
     const M = P.marginPx, W = dw + 2 * M, H = dh + 2 * M + P.titlePx;
-    const sheet: Sheet = { W, H, rgb: new Uint8Array(W * H * 3), inkC: sc.ink };
+    const sheet: Sheet = { W, H, rgb: new Uint8Array(W * H * 3), inkC: sc.ink, vec: [] };
     for (let i = 0; i < W * H; i++) sheet.rgb.set(sc.bg, i * 3);
     const col = (uu: number) => (uu - uMin) / pixelM, row = (vv: number) => (vMax - vv) / pixelM;
     const X = (uu: number) => M + col(uu), Y = (vv: number) => M + row(vv);
@@ -169,7 +232,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     // weights: the silhouette heaviest (a 3 px brush), everything else one pixel, told apart by its tone (alpha)
     const heavy = 1, medium = 0;
     const TONE = { structure: 1, opening: 0.85, fine: 0.5, photo: 0.22 };
-    const depth = depthBuffer(m, view, dw, dh, col, row);
+    const depth = depthBuffer(depthMesh, view, dw, dh, col, row);
     const visibleAt = (uu: number, vv: number, dd: number, eps: number) => { const x = Math.round(col(uu)), y = Math.round(row(vv)); if (x < 0 || y < 0 || x >= dw || y >= dh) return false; let best = Infinity; for (let k = -1; k <= 1; k++) for (let j = -1; j <= 1; j++) { const xx = x + j, yy = y + k; if (xx >= 0 && yy >= 0 && xx < dw && yy < dh) best = Math.min(best, depth[yy * dw + xx]); } return dd <= best + eps; };
     // an inferred element (a bay, a window) lies on the surface the viewer sees: within eps of it, in front or behind (never over empty background)
     const onSurface = (uu: number, vv: number, dd: number, eps: number) => { const x = Math.round(col(uu)), y = Math.round(row(vv)); if (x < 0 || y < 0 || x >= dw || y >= dh) return false; const b = depth[y * dw + x]; return Number.isFinite(b) && Math.abs(dd - b) <= eps; };
@@ -187,7 +250,10 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     let photoEdgePixels = 0;
     if (inputs.photo && !isPlan) {
         const pe = photoEdges(inputs.photo, view, dw, dh, col, row, LINE_DRAWING_PARAMS);
-        for (let i = 0; i < dw * dh; i++) if (pe.edge[i]) { ink(sheet, M + (i % dw), M + Math.floor(i / dw), TONE.photo); photoEdgePixels++; }
+        const layer = new Uint8Array(dw * dh * 4);
+        for (let i = 0; i < dw * dh; i++) if (pe.edge[i]) { ink(sheet, M + (i % dw), M + Math.floor(i / dw), TONE.photo); photoEdgePixels++; layer.set([...sc.ink, Math.round(255 * TONE.photo)], 4 * i); }
+        // in the SVG the hairlines are one image under the vectors (a vector a pixel would be no drawing)
+        if (photoEdgePixels) sheet.vec.push(`<image x="${M}" y="${M}" width="${dw}" height="${dh}" href="data:image/png;base64,${encodePng(dw, dh, layer, 4).toString('base64')}"/>`);
     }
     // what is already drawn, in sheet pixels: a later element landing mostly (share) on one of the same kind is a duplicate
     const CELL = 32, claims = new Map<string, Map<number, number[][]>>();
@@ -239,7 +305,8 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         let any = false;
         const drawn: Array<{ s0: number; s1: number; t0: number; t1: number }> = [];
         const mine: number[][] = [];
-        for (const r of fc.rects) {
+        const mod = P.snapToModule ? moduleOf(fc) : undefined;
+        for (const r of mod ? mod.rects : fc.rects) {
             const g = visibleRect(r);
             if (!g) continue;
             const wb = boxOf(g.q);
@@ -249,8 +316,15 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             line(sheet, X(dot(world(g.s0 - P.sillM, g.t0), right)), Y(dot(world(g.s0 - P.sillM, g.t0), up)), X(dot(world(g.s1 + P.sillM, g.t0), right)), Y(dot(world(g.s1 + P.sillM, g.t0), up)), TONE.opening, 0);
             windows++; sills++; any = true; drawn.push(g);
         }
-        // the mullions: the reading's panes inside each window
-        for (const p of fc.panes ?? []) {
+        // the mullions: with the module, each window split evenly at its column's pane count; else the reading's panes
+        if (mod) for (const [r, nPanes] of mod.rects.map((r, k) => [r, mod.panes[k]] as const)) {
+            if (nPanes < 2) continue;
+            const g = rectWorld(r), b = boxOf(g.q);
+            if (!mine.some(o => o[0] === b[0] && o[1] === b[1] && o[2] === b[2] && o[3] === b[3])) continue;
+            for (let k = 1; k < nPanes; k++) { const sx = g.s0 + ((g.s1 - g.s0) * k) / nPanes; seg(world(sx, g.t0), world(sx, g.t1), TONE.fine, 0); }
+            panes += nPanes;
+        }
+        else for (const p of fc.panes ?? []) {
             const g = visibleRect(p); if (!g) continue;
             // only inside a window this facade drew (a duplicate's panes go with it)
             const pb = boxOf(g.q), pa = Math.max(1, (pb[2] - pb[0]) * (pb[3] - pb[1]));
@@ -307,14 +381,23 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         if (!(len > 0) || Math.min(Math.abs(ub - ua), Math.abs(vb - va)) / len > sinAxis) continue;
         const da = d(e.a), db = d(e.b), n = Math.max(1, Math.round((len / pixelM) * 1.3));
         const horizontal = !isPlan && Math.abs(vb - va) <= sinAxis * len;
-        let drawnPx = 0;
+        let drawnPx = 0, run = -1;
+        const flush = (endS: number) => {
+            if (run < 0) return;
+            const f0 = run / n, f1 = endS / n, x0 = X(ua + (ub - ua) * f0), y0 = Y(va + (vb - va) * f0), x1 = X(ua + (ub - ua) * f1), y1 = Y(va + (vb - va) * f1);
+            vline(sheet, x0, y0, x1, y1, 1, e.kind === 'silhouette' ? heavy : medium);
+            if (horizontal && len >= P.ledgeMinM) vline(sheet, x0, y0 + P.ledgeM / pixelM, x1, y1 + P.ledgeM / pixelM, TONE.opening, 0);
+            run = -1;
+        };
         for (let s = 0; s <= n; s++) {
             const f = s / n, uu = ua + (ub - ua) * f, vv = va + (vb - va) * f;
-            if (!visibleAt(uu, vv, da + (db - da) * f, P.depthEpsM)) continue;
+            if (!visibleAt(uu, vv, da + (db - da) * f, P.depthEpsM)) { flush(s - 1); continue; }
+            if (run < 0) run = s;
             ink(sheet, X(uu), Y(vv), 1, e.kind === 'silhouette' ? heavy : medium);
             if (horizontal && len >= P.ledgeMinM) ink(sheet, X(uu), Y(vv - P.ledgeM), TONE.opening, 0);
             drawnPx++;
         }
+        flush(n);
         if (!drawnPx) continue;
         outlineEdges++;
         if (horizontal && len >= P.ledgeMinM) ledges++;
@@ -396,18 +479,21 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
  * The elevation set of a scan (a triangle soup in the frame its facades, walls and symmetry are read in): four
  * elevations square to its walls (A to D) and the roof plan, constructed from what `inputs` gives.
  */
-export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> } {
+export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string }> } {
     const t0 = Date.now();
-    const m = weld(positions);
+    const m = weld(inputs.structure ?? positions);
+    // the depth the elements and the outline are tested against: the structure with its openings closed, when given
+    let depthMesh = m;
+    if (inputs.structure && inputs.structureFill && inputs.structureFill.length) { const both = new Float64Array(inputs.structure.length + inputs.structureFill.length); both.set(inputs.structure); both.set(inputs.structureFill, inputs.structure.length); depthMesh = weld(both); }
     const azimuth = wallAzimuthDeg(m);
     let groundY = Infinity;
     for (let i = 1; i < m.P.length; i += 3) if (m.P[i] < groundY) groundY = m.P[i];
     const labels: Record<string, string> = { north: 'ELEVATION A', east: 'ELEVATION B', south: 'ELEVATION C', west: 'ELEVATION D', plan: 'ROOF PLAN' };
     const views = CARDINAL_VIEWS.map(v => turned(v, azimuth));
-    const pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> = [], stats: BlueprintReport['views'] = [];
+    const pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string }> = [], stats: BlueprintReport['views'] = [];
     for (const view of views) {
-        const { png, stats: s } = renderSheet(m, view, labels[view.name] ?? view.name.toUpperCase(), inputs, P, azimuth, groundY);
-        pngs.push({ name: view.name, width: png.W, height: png.H, rgb: png.rgb });
+        const { png, stats: s } = renderSheet(m, view, labels[view.name] ?? view.name.toUpperCase(), inputs, P, azimuth, groundY, depthMesh);
+        pngs.push({ name: view.name, width: png.W, height: png.H, rgb: png.rgb, svg: svgOf(png, SCHEMES[P.scheme].bg) });
         stats.push(s);
     }
     return { report: { version: BLUEPRINT_VERSION, params: P, wallAzimuthDeg: azimuth, views: stats, ms: Date.now() - t0 }, pngs };

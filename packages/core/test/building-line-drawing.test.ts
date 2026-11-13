@@ -55,6 +55,29 @@ describe('building blueprint: windows on their facades, mirrored about its axis'
     });
 });
 
+describe('building blueprint: the module and the vectors', () => {
+    it('redraws a facade\'s jittered windows on its module, one width a column and one height a row, and writes SVG', () => {
+        // a 20 x 12 x 10 m box; its +z face with a 3 x 3 grid of windows each read a little off (a few px of jitter)
+        const soup = Float32Array.from(box(0, 0, 0, 20, 12, 10));
+        const frame = { centroid: [10, 6, 10] as [number, number, number], normal: [0, 0, 1] as [number, number, number], axisS: [1, 0, 0] as [number, number, number], axisT: [0, 1, 0] as [number, number, number], orthoSMin: -10, orthoTMax: 6, pixel: 0.1, width: 200, height: 120 };
+        const jitter = [[0, 2, -1, 1], [2, -1, 1, 0], [-2, 1, 0, -2], [1, 0, 2, 1], [-1, -2, -1, 2], [0, 1, 1, -1], [2, 2, -2, 0], [-1, 0, 0, 1], [1, -1, 2, -2]];
+        const rects: Array<[number, number, number, number]> = [];
+        let k = 0;
+        for (const cx of [40, 100, 160]) for (const cy of [25, 60, 95]) { const j = jitter[k++]; rects.push([cx - 10 + j[0], cy - 12 + j[1], cx + 10 + j[2], cy + 12 + j[3]]); }
+        const { report, pngs } = renderBlueprints(soup, { facades: [{ facadeId: 1, frame, rects }] });
+        const front = report.views.find(v => v.forward[2] < -0.99)!, png = pngs[report.views.indexOf(front)];
+        expect(front.windows).toBe(9);
+        // the SVG holds every window's four edges as straight lines; read their vertical edges' x positions back
+        expect(png.svg.startsWith('<svg')).toBe(true);
+        const lines = [...png.svg.matchAll(/<line x1="([\d.]+)" y1="([\d.]+)" x2="([\d.]+)" y2="([\d.]+)" stroke-width="1"(?: stroke-opacity="0.85")?\/>/g)].map(m => m.slice(1).map(Number));
+        const verticals = lines.filter(([x1, y1, x2, y2]) => Math.abs(x1 - x2) < 0.05 && Math.abs(y2 - y1) > 15 && Math.abs(y2 - y1) < 30);
+        // on the module the 9 windows' 18 vertical edges fall on 6 x positions exactly (jittered, they fell on many)
+        const xs = [...new Set(verticals.map(v => v[0].toFixed(1)))];
+        expect(verticals.length).toBeGreaterThanOrEqual(18);
+        expect(xs.length).toBe(6);
+    });
+});
+
 describe('building line drawing: silhouette and crease, hidden lines removed', () => {
     it('draws a box\'s outline seen face on and hides a box standing behind it', () => {
         // a big box in front (nearer the north view's camera, which looks toward -z from +z) and a small one behind it
@@ -173,7 +196,8 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         expect(ac.bays).toBeGreaterThan(20);
         expect(ac.sills).toBe(c.windows);
         expect(ac.spandrels).toBeGreaterThan(1000);
-        expect(ac.panes).toBeGreaterThan(1000);
+        // panes are drawn per module column now (one split for a whole column), not per window read
+        expect(ac.panes).toBeGreaterThan(50);
         expect(ac.ledges).toBeGreaterThan(50);
         // overlapping facade readings drawn once (the shaft's): duplicates left out; the photo's detail as hairlines
         const dup = rep.views[2] as unknown as { duplicatesSkipped: number; photoEdgePixels: number };
@@ -186,7 +210,19 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         for (const v of rep.views.slice(0, 4)) expect(v.planAxes).toBeGreaterThanOrEqual(1);
         expect(plan.planAxes).toBe(2);
         expect(Math.round(a.extentM[1])).toBe(441);
-        const files = r.payload.files as Array<{ path: string }>;
-        for (const f of files) expect([...fs.readFileSync(f.path).subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+        const files = r.payload.files as Array<{ path: string; svg: string }>;
+        for (const f of files) { expect([...fs.readFileSync(f.path).subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); expect(fs.readFileSync(f.svg, 'utf8').startsWith('<svg')).toBe(true); }
+    }, 300_000);
+
+    const TWIN = path.resolve(__dirname, '../../../.scratchbox/cache/staged_location/measured_twin/493d1ee7/measured_twin.glb');
+    it.skipIf(!fs.existsSync(TWIN))('draws the outline from the measured twin\'s clean shell, the windows kept on its panes', async () => {
+        const work = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-twin-'));
+        const r = await runBuildingLineDrawing({ glbPath: ESB_CLAY, structureGlbPath: TWIN, outputDir: path.join(work, 'out') }, work, work);
+        expect(r.payload.structureFrom).toBe(TWIN);
+        const scan = await runBuildingLineDrawing({ glbPath: ESB_CLAY, outputDir: path.join(work, 'scan') }, work, work);
+        const twinC = (r.payload.report as { views: Array<{ outlineEdges: number; windows: number }> }).views[2], scanC = (scan.payload.report as { views: Array<{ outlineEdges: number; windows: number }> }).views[2];
+        // the twin's shell is clean: far fewer outline edges than the scan's folds; the windows stay (on the twin's panes)
+        expect(twinC.outlineEdges).toBeLessThan(0.6 * scanC.outlineEdges);
+        expect(twinC.windows).toBeGreaterThan(0.8 * scanC.windows);
     }, 300_000);
 });
