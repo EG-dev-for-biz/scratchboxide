@@ -98,6 +98,12 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         expect(south.silhouette.drawn).toBeGreaterThan(1000);
         // the plan draws the setbacks and roofs: creases where the terraces meet the walls above them
         expect(plan.crease.drawn).toBeGreaterThan(500);
+        // the facade detail the flat mesh cannot hold comes from the photo beside the cut-out (textured.glb): thousands of
+        // edge pixels on the elevation, a minority of what the textured scan covers (the quantile keeps the strongest)
+        const sp = (south as unknown as { photo?: { covered: number; edgePixels: number } }).photo!;
+        expect(r.payload.photoSource).toBe(ESB_CLAY.replace(/clay\.glb$/, 'textured.glb'));
+        expect(sp.edgePixels).toBeGreaterThan(10_000);
+        expect(sp.edgePixels).toBeLessThan(sp.covered * 0.15);
         expect(fs.existsSync(path.join(work, 'out', 'line_drawing.json'))).toBe(true);
     }, 300_000);
 });

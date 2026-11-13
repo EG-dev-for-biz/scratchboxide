@@ -26,6 +26,7 @@ import { parseGlbBytes } from '../../../3d-engine/staged-location/glb-bytes';
 import { glbSoup } from '../../../3d-engine/staged-location/facade-lattice';
 import { LINE_DRAWING_PARAMS, renderBuildingLineDrawings, type LineDrawingParams } from '../../../3d-engine/staged-location/building-line-drawing';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
+import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 
 export const BUILDING_LINE_DRAWING_TOOL_NAME = 'location_building_line_drawing';
@@ -54,7 +55,7 @@ export function scanOfRun(roots: string[], runId: string): string {
     throw new BuildingLineDrawingError('not_found', `staged run ${runId} names no cut-out scan (tile_refine/<key>/clay.glb) on this machine`);
 }
 
-export interface BuildingLineDrawingRequest { runId?: string; glbPath?: string; pixelM?: number; creaseDeg?: number; minEdgeLenM?: number; outputDir?: string }
+export interface BuildingLineDrawingRequest { runId?: string; glbPath?: string; texturedGlbPath?: string; photo?: boolean; pixelM?: number; creaseDeg?: number; minEdgeLenM?: number; outputDir?: string }
 
 export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, workspaceRoot: string, stagedRoot = stagedWorkspaceRoot()): Promise<{ summary: string; payload: Record<string, unknown> }> {
     const roots = [...new Set([stagedRoot, workspaceRoot].filter(Boolean))];
@@ -74,7 +75,10 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
         ...(req.creaseDeg !== undefined && req.creaseDeg > 0 && req.creaseDeg < 180 ? { creaseDeg: req.creaseDeg } : {}),
         ...(req.minEdgeLenM !== undefined && req.minEdgeLenM >= 0 ? { minEdgeLenM: req.minEdgeLenM } : {})
     };
-    const { report, pngs } = renderBuildingLineDrawings(soup, undefined, P);
+    // the photo's edges: the textured scan beside the cut-out (tile_refine's textured.glb), or the one given
+    const texturedPath = req.photo === false ? undefined : req.texturedGlbPath ? within(req.texturedGlbPath) : path.join(path.dirname(glb), 'textured.glb');
+    const photo = texturedPath && fs.existsSync(texturedPath) ? readTileTriangles(fs.readFileSync(texturedPath)) : undefined;
+    const { report, pngs } = renderBuildingLineDrawings(soup, undefined, P, photo);
     const name = req.runId ?? path.basename(glb, '.glb');
     const outDir = req.outputDir ? within(req.outputDir) : path.join(stagedRoot, STAGED_CACHE, 'line_drawing', name);
     const wsDir = path.join(workspaceRoot || stagedRoot, 'renders', 'line-drawing', name);
@@ -88,11 +92,11 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
         files.push({ view: p.name, path: file, workspacePath: ws });
     }
     const json = path.join(outDir, 'line_drawing.json');
-    fs.writeFileSync(json, JSON.stringify({ source: glb, ...report }, null, 1));
-    const per = report.views.map(v => `${v.name} ${v.width}x${v.height} px at ${Math.round(v.pixelM * 1000) / 1000} m (silhouette ${v.silhouette.drawn}, crease ${v.crease.drawn}, open edges ${v.boundary.drawn})`).join('; ');
+    fs.writeFileSync(json, JSON.stringify({ source: glb, ...(photo ? { photoSource: texturedPath } : {}), ...report }, null, 1));
+    const per = report.views.map(v => `${v.name} ${v.width}x${v.height} px at ${Math.round(v.pixelM * 1000) / 1000} m (silhouette ${v.silhouette.drawn}, crease ${v.crease.drawn}, open edges ${v.boundary.drawn}${v.photo ? `, photo edges ${v.photo.edgePixels} px` : ''})`).join('; ');
     return {
-        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: the scan's silhouette and creases, hidden lines removed, from ${report.views.length} views turned ${report.wallAzimuthDeg} degrees to face its walls (${per}); ${report.triangles.toLocaleString('en-US')} triangles; measured (geometry only). Files in ${wsDir}.`,
-        payload: { source: glb, reportJson: json, files, report }
+        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: the scan's silhouette and creases, hidden lines removed, from ${report.views.length} views turned ${report.wallAzimuthDeg} degrees to face its walls (${per}); ${report.triangles.toLocaleString('en-US')} triangles; ${photo ? 'the geometry\'s lines measured, the facade detail from the photo\'s edges (photo-inferred)' : 'measured (geometry only: no textured scan found)'}. Files in ${wsDir}.`,
+        payload: { source: glb, ...(photo ? { photoSource: texturedPath } : {}), reportJson: json, files, report }
     };
 }
 
@@ -100,6 +104,7 @@ export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
     name: BUILDING_LINE_DRAWING_TOOL_NAME,
     description: 'Draw a staged building\'s scan as line drawings, the way elevations and a plan draw a building: its silhouette edges (black), crease edges (dark grey: corners, setbacks, cornices, pier sides, where two surfaces meet at creaseDeg or more) and open edges (light grey: the scan\'s own holes and cuts), with hidden lines removed, ' +
         'from four sides square to the building\'s own walls (their dominant direction measured from the scan) and from above (the roof plan, which shows the terraces and setbacks). A geometric guide to what the scan measures on every surface. Geometry only, no model call: every line is a measured edge of the scan. ' +
+        'With the textured scan (found beside the run\'s cut-out, or texturedGlbPath) the facade detail the geometry is too coarse to hold (windows, bands, spandrels, mullions) is added from the photo: its strongest edges, mid grey, labelled photo-inferred (an edge in the photo may also be a shadow or a smear); the geometry\'s lines stay measured. ' +
         'Writes one PNG per view and line_drawing.json (each view\'s frame, so a pixel maps back to the scan, and the edges found and drawn by kind) and copies the PNGs into the workspace under renders/line-drawing/. ' +
         'Give runId (a staged run: its cut-out scan is drawn) or glbPath (any GLB without node transforms).',
     parameters: {
@@ -107,7 +112,9 @@ export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
         properties: {
             runId: { type: 'STRING', description: 'A staged-location run id (8 hex digits); its cut-out scan (tile_refine clay.glb) is drawn. Default: the staged build open in the viewport.' },
             glbPath: { type: 'STRING', description: 'Instead of a run: a GLB (path or /models/... URL) whose triangles carry no node transforms.' },
-            pixelM: { type: 'NUMBER', description: 'Metres per pixel (default 0.12); coarsened so no view passes 2400 px on its long side.' },
+            texturedGlbPath: { type: 'STRING', description: 'The textured scan whose photo edges add the facade detail (default: textured.glb beside the cut-out).' },
+            photo: { type: 'BOOLEAN', description: 'false: draw the geometry only, no photo edges (default true when a textured scan is found).' },
+            pixelM: { type: 'NUMBER', description: 'Metres per pixel (default 0.1); coarsened so no view passes 4096 px on its long side.' },
             creaseDeg: { type: 'NUMBER', description: 'Two surfaces meeting at this angle or more draw a crease line (default 25).' },
             minEdgeLenM: { type: 'NUMBER', description: 'Edges shorter than this (metres) are mesh noise and not drawn (default 0.3).' },
             outputDir: { type: 'STRING', description: 'Where to write (default: .scratchbox/cache/staged_location/line_drawing/<run>).' }
@@ -121,8 +128,8 @@ export const buildingLineDrawingHandler: ToolHandler = async (args, ctx): Promis
     try {
         const active = ctx.request?.activeArtifact?.type === '3d-scene' ? (ctx.request.activeArtifact.data as { stagedBuild?: { runId?: string } } | undefined)?.stagedBuild : undefined;
         const runId = str(args.runId) ?? (!str(args.glbPath) ? active?.runId : undefined);
-        const pixelM = num(args.pixelM), creaseDeg = num(args.creaseDeg), minEdgeLenM = num(args.minEdgeLenM), outputDir = str(args.outputDir), glbPath = str(args.glbPath);
-        const r = await runBuildingLineDrawing({ ...(runId ? { runId } : {}), ...(glbPath ? { glbPath } : {}), ...(pixelM !== undefined ? { pixelM } : {}), ...(creaseDeg !== undefined ? { creaseDeg } : {}), ...(minEdgeLenM !== undefined ? { minEdgeLenM } : {}), ...(outputDir ? { outputDir } : {}) }, ctx.workspaceRoot);
+        const pixelM = num(args.pixelM), creaseDeg = num(args.creaseDeg), minEdgeLenM = num(args.minEdgeLenM), outputDir = str(args.outputDir), glbPath = str(args.glbPath), texturedGlbPath = str(args.texturedGlbPath);
+        const r = await runBuildingLineDrawing({ ...(runId ? { runId } : {}), ...(glbPath ? { glbPath } : {}), ...(pixelM !== undefined ? { pixelM } : {}), ...(creaseDeg !== undefined ? { creaseDeg } : {}), ...(minEdgeLenM !== undefined ? { minEdgeLenM } : {}), ...(outputDir ? { outputDir } : {}), ...(texturedGlbPath ? { texturedGlbPath } : {}), ...(args.photo === false ? { photo: false } : {}) }, ctx.workspaceRoot);
         return { status: 'completed', summaryResult: r.summary, resultPayload: { status: 'success', ...r.payload } };
     } catch (err) {
         const code = err instanceof BuildingLineDrawingError ? err.code : 'draw_failed';

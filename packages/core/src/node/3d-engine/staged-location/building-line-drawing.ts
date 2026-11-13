@@ -29,11 +29,17 @@
  *     the depth buffer there (within depthEpsM), so a line behind the surface facing the viewer is not drawn. Silhouettes
  *     are drawn black, creases dark grey and open boundary edges light grey (the scan's own holes, tile cuts and ground
  *     fringe are real edges, drawn, but read after the building's outline).
- * Every edge comes straight from the scan: the whole drawing is measured, never generated or inferred.
+ *  5. With the textured scan (its photo), the facade detail the geometry is too coarse to hold (windows, bands,
+ *     spandrels, mullions: Google's mesh is flat at that scale) is drawn from the photo: the textured triangles rendered
+ *     into a luminance image in the same frame (their own depth test), its gradient thinned to one pixel across the edge
+ *     and kept above photoEdgeQuantile of the view's covered gradients, drawn mid grey under the geometry's lines.
+ * The geometry's lines are measured; the photo's are photo-inferred (an edge in the photo: a window, or a shadow or a
+ * smear), and the two are drawn and counted apart.
  */
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { drawText } from './photo-match-eval';
+import type { TileTriangles } from './tile-texture-transfer';
 
 export interface LineDrawingParams {
     /** World metres per pixel, coarsened automatically so no view's long side passes maxDimPx. */
@@ -47,9 +53,11 @@ export interface LineDrawingParams {
     depthEpsM: number;
     /** Samples per pixel of an edge's projected length. */
     samplesPerPx: number;
+    /** With the photo: a photo pixel is an edge when its gradient passes this quantile of the view's covered pixels' and is a local maximum across the edge. */
+    photoEdgeQuantile: number;
 }
 
-export const LINE_DRAWING_PARAMS: LineDrawingParams = { pixelM: 0.12, maxDimPx: 2400, creaseDeg: 25, minEdgeLenM: 0.3, depthEpsM: 0.08, samplesPerPx: 1.3 };
+export const LINE_DRAWING_PARAMS: LineDrawingParams = { pixelM: 0.1, maxDimPx: 4096, creaseDeg: 25, minEdgeLenM: 0.3, depthEpsM: 0.08, samplesPerPx: 1.3, photoEdgeQuantile: 0.85 };
 
 /** forward: the view direction (into the screen); right, up: the screen's axes (both unit, both perpendicular to forward). */
 export interface LineDrawingView { name: string; forward: Vec3; right: Vec3; up: Vec3 }
@@ -76,12 +84,14 @@ export interface LineDrawingReport {
         frontFacingTriangles: number;
         /** Candidates found and samples actually drawn, by class. */
         silhouette: { candidates: number; drawn: number }; crease: { candidates: number; drawn: number }; boundary: { candidates: number; drawn: number };
+        /** With the photo: its pixels drawn (covered by the textured scan) and those drawn as photo edges (photo-inferred). */
+        photo?: { covered: number; edgePixels: number; threshold: number };
         ms: number;
     }>;
     ms: number;
 }
 
-export const LINE_DRAWING_VERSION = 'building-line-drawing/2';
+export const LINE_DRAWING_VERSION = 'building-line-drawing/3';
 
 // --- geometry -----------------------------------------------------------------------------------------------------
 
@@ -165,7 +175,81 @@ function put(c: Canvas, x: number, y: number, a: number): void {
     for (let k = 0; k < 3; k++) c.rgb[o + k] = Math.min(c.rgb[o + k], v);
 }
 
-function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineDrawingParams, t0: number): { png: { width: number; height: number; rgb: Uint8Array }; stats: LineDrawingReport['views'][number] } {
+/**
+ * The photo's edges in a view's frame (see the file comment, 5): the textured triangles' luminance rendered with their own
+ * depth test (bilinear texels, perceptual lightness so shade does not hide an edge), its Sobel gradient, and the pixels
+ * that pass the quantile and are a local maximum across the gradient. Returns the edge mask and its counts.
+ */
+function photoEdges(photo: TileTriangles, view: LineDrawingView, W: number, H: number, col: (u: number) => number, row: (v: number) => number, P: LineDrawingParams): { edge: Uint8Array; covered: number; edgePixels: number; threshold: number } {
+    const { forward, right, up } = view;
+    const N = W * H, depth = new Float32Array(N).fill(Infinity), lum = new Float32Array(N).fill(NaN);
+    const nTri = photo.positions.length / 9, rgb = new Float64Array(3);
+    const sample = (ti: number, u: number, v: number): number => {
+        const k = photo.texture[ti];
+        if (k < 0) { const f = photo.flatLinear; rgb[0] = f[3 * ti]; rgb[1] = f[3 * ti + 1]; rgb[2] = f[3 * ti + 2]; }
+        else {
+            const tex = photo.textures[k], wrap = (x: number, n: number, rep: boolean) => (rep ? ((x % n) + n) % n : Math.min(n - 1, Math.max(0, x)));
+            const fx = u * tex.width - 0.5, fy = v * tex.height - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+            const xa = wrap(x0, tex.width, tex.repeatS), xb = wrap(x0 + 1, tex.width, tex.repeatS), ya = wrap(y0, tex.height, tex.repeatT), yb = wrap(y0 + 1, tex.height, tex.repeatT);
+            for (let c = 0; c < 3; c++) { const L = tex.linear; rgb[c] = (L[(ya * tex.width + xa) * 3 + c] * (1 - tx) + L[(ya * tex.width + xb) * 3 + c] * tx) * (1 - ty) + (L[(yb * tex.width + xa) * 3 + c] * (1 - tx) + L[(yb * tex.width + xb) * 3 + c] * tx) * ty; }
+        }
+        return Math.cbrt(Math.max(0, 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]));
+    };
+    const dot3 = (o: number, a: Vec3) => photo.positions[o] * a[0] + photo.positions[o + 1] * a[1] + photo.positions[o + 2] * a[2];
+    for (let t = 0; t < nTri; t++) {
+        if (photo.normals[3 * t] * forward[0] + photo.normals[3 * t + 1] * forward[1] + photo.normals[3 * t + 2] * forward[2] >= -FACING_EPS) continue;
+        if (photo.fill && photo.fill[t]) continue; // a fill a stage laid where the photo did not reach: not the photo's edge
+        const o = 9 * t, cs = [0, 1, 2].map(k => col(dot3(o + 3 * k, right))), rs = [0, 1, 2].map(k => row(dot3(o + 3 * k, up))), ds = [0, 1, 2].map(k => dot3(o + 3 * k, forward));
+        const x0 = Math.max(0, Math.floor(Math.min(...cs))), x1 = Math.min(W - 1, Math.ceil(Math.max(...cs))), y0 = Math.max(0, Math.floor(Math.min(...rs))), y1 = Math.min(H - 1, Math.ceil(Math.max(...rs)));
+        if (x1 < x0 || y1 < y0) continue;
+        const area = (cs[1] - cs[0]) * (rs[2] - rs[0]) - (cs[2] - cs[0]) * (rs[1] - rs[0]);
+        if (!(Math.abs(area) > 1e-9)) continue;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const px = x + 0.5, py = y + 0.5;
+            const w0 = ((cs[1] - px) * (rs[2] - py) - (cs[2] - px) * (rs[1] - py)) / area, w1 = ((cs[2] - px) * (rs[0] - py) - (cs[0] - px) * (rs[2] - py)) / area, w2 = 1 - w0 - w1;
+            if (w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4) continue;
+            const d = w0 * ds[0] + w1 * ds[1] + w2 * ds[2], i = y * W + x;
+            if (d >= depth[i]) continue;
+            depth[i] = d;
+            const uv = photo.uvs, q = 6 * t;
+            lum[i] = sample(t, w0 * uv[q] + w1 * uv[q + 2] + w2 * uv[q + 4], w0 * uv[q + 1] + w1 * uv[q + 3] + w2 * uv[q + 5]);
+        }
+    }
+    // Sobel, only where all eight neighbours are covered (a photo's edge against the background is the silhouette's job)
+    const gx = new Float32Array(N), gy = new Float32Array(N), mag = new Float32Array(N);
+    const mags: number[] = [];
+    let covered = 0;
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x;
+        if (!Number.isFinite(lum[i])) continue;
+        ++covered;
+        let ok = true;
+        for (let dy = -1; dy <= 1 && ok; dy++) for (let dx = -1; dx <= 1; dx++) if (!Number.isFinite(lum[i + dy * W + dx])) { ok = false; break; }
+        if (!ok) continue;
+        const a = (dx: number, dy: number) => lum[i + dy * W + dx];
+        gx[i] = (a(1, -1) + 2 * a(1, 0) + a(1, 1)) - (a(-1, -1) + 2 * a(-1, 0) + a(-1, 1));
+        gy[i] = (a(-1, 1) + 2 * a(0, 1) + a(1, 1)) - (a(-1, -1) + 2 * a(0, -1) + a(1, -1));
+        mag[i] = Math.hypot(gx[i], gy[i]);
+        mags.push(mag[i]);
+    }
+    const edge = new Uint8Array(N);
+    if (!mags.length) return { edge, covered, edgePixels: 0, threshold: 0 };
+    mags.sort((a, b) => a - b);
+    const threshold = mags[Math.min(mags.length - 1, Math.floor(mags.length * P.photoEdgeQuantile))];
+    let edgePixels = 0;
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        const i = y * W + x, g = mag[i];
+        if (!(g > threshold)) continue;
+        // a local maximum across the edge (the gradient's direction, to the nearest of four)
+        const ang = Math.atan2(gy[i], gx[i]), q = ((Math.round(ang / (Math.PI / 4)) % 4) + 4) % 4;
+        const [dx, dy] = [[1, 0], [1, 1], [0, 1], [-1, 1]][q];
+        if (g < mag[i + dy * W + dx] || g < mag[i - dy * W - dx]) continue;
+        edge[i] = 1; ++edgePixels;
+    }
+    return { edge, covered, edgePixels, threshold: Math.round(threshold * 1e4) / 1e4 };
+}
+
+function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineDrawingParams, t0: number, photo?: TileTriangles): { png: { width: number; height: number; rgb: Uint8Array }; stats: LineDrawingReport['views'][number] } {
     const { forward, right, up } = view;
     const u = (i: number) => m.P[3 * i] * right[0] + m.P[3 * i + 1] * right[1] + m.P[3 * i + 2] * right[2];
     const v = (i: number) => m.P[3 * i] * up[0] + m.P[3 * i + 1] * up[1] + m.P[3 * i + 2] * up[2];
@@ -203,6 +287,13 @@ function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineD
     }
 
     const canvas: Canvas = { W, H, rgb: new Uint8Array(W * H * 3).fill(255) };
+    // the photo's edges first, mid grey: the geometry's lines are drawn over them
+    let photoStats: { covered: number; edgePixels: number; threshold: number } | undefined;
+    if (photo) {
+        const pe = photoEdges(photo, view, W, H, col, row, P);
+        for (let i = 0; i < W * H; i++) if (pe.edge[i]) put(canvas, i % W, Math.floor(i / W), 0.5);
+        photoStats = { covered: pe.covered, edgePixels: pe.edgePixels, threshold: pe.threshold };
+    }
     const stats = { silhouette: { candidates: 0, drawn: 0 }, crease: { candidates: 0, drawn: 0 }, boundary: { candidates: 0, drawn: 0 } };
     const ink = { silhouette: 1, crease: 0.7, boundary: 0.3 } as const; // the share of black each class is drawn with
     for (const e of edges) {
@@ -218,11 +309,11 @@ function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineD
         }
         if (any) stats[e.kind].drawn++;
     }
-    const caption = `${view.name.toUpperCase()}  ${Math.round(pixelM * 1000) / 1000} M/PX  SILHOUETTE ${stats.silhouette.drawn}/${stats.silhouette.candidates}  CREASE ${stats.crease.drawn}/${stats.crease.candidates}  BOUNDARY ${stats.boundary.drawn}/${stats.boundary.candidates}`;
+    const caption = `${view.name.toUpperCase()}  ${Math.round(pixelM * 1000) / 1000} M/PX  SILHOUETTE ${stats.silhouette.drawn}/${stats.silhouette.candidates}  CREASE ${stats.crease.drawn}/${stats.crease.candidates}  BOUNDARY ${stats.boundary.drawn}/${stats.boundary.candidates}${photoStats ? `  PHOTO EDGES ${photoStats.edgePixels} PX` : ''}`;
     drawText(canvas.rgb, canvas.W, canvas.H, 4, 4, caption, 1, [0, 0, 0]);
     return {
         png: { width: W, height: H, rgb: canvas.rgb },
-        stats: { name: view.name, width: W, height: H, pixelM, originU: uMin, originV: vMax, right: view.right, up: view.up, forward: view.forward, frontFacingTriangles: frontFacing, ...stats, ms: Date.now() - t0 }
+        stats: { name: view.name, width: W, height: H, pixelM, originU: uMin, originV: vMax, right: view.right, up: view.up, forward: view.forward, frontFacingTriangles: frontFacing, ...stats, ...(photoStats ? { photo: photoStats } : {}), ms: Date.now() - t0 }
     };
 }
 
@@ -268,7 +359,7 @@ function turned(v: LineDrawingView, deg: number): LineDrawingView {
  * roof plan). `positions` is a triangle soup (9 floats a triangle) in the frame the result is reported in (the scan's
  * own, untransformed, as `clay.glb` carries no node transforms).
  */
-export function renderBuildingLineDrawings(positions: Float32Array | Float64Array, views?: LineDrawingView[], P: LineDrawingParams = LINE_DRAWING_PARAMS): { report: LineDrawingReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> } {
+export function renderBuildingLineDrawings(positions: Float32Array | Float64Array, views?: LineDrawingView[], P: LineDrawingParams = LINE_DRAWING_PARAMS, photo?: TileTriangles): { report: LineDrawingReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> } {
     const t0 = Date.now();
     const m = weld(positions);
     // with no views given, the cardinal ones turned to face the building's walls
@@ -282,7 +373,7 @@ export function renderBuildingLineDrawings(positions: Float32Array | Float64Arra
         const tv = Date.now();
         const edges = classifyEdges(m, view.forward, creaseCos, P.minEdgeLenM);
         edgeTotal += edges.length;
-        const { png, stats } = renderView(m, view, edges, P, tv);
+        const { png, stats } = renderView(m, view, edges, P, tv, photo);
         pngs.push({ name: view.name, ...png });
         viewReports.push(stats);
     }
