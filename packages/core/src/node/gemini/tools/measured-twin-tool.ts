@@ -169,7 +169,9 @@ function hybridSummary(r: MeasuredTwinResult): string {
     const rd = h.reader && 'read' in h.reader ? `the facade reader read ${h.reader.read} planes (${h.reader.readerWindows} openings, ${h.reader.calls} calls, ${h.reader.reused} kept answers)` : `facade reader ${h.reader && 'reason' in h.reader ? `skipped (${h.reader.reason})` : 'not run'}`;
     const sym = h.symmetry && 'fill' in h.symmetry ? `symmetry: ${h.symmetry.fill}${h.symmetry.windows ? `; ${h.symmetry.windows}` : ''} (generated); ` : h.symmetry ? `symmetry skipped (${h.symmetry.reason}); ` : '';
     const ex = r.exposure ? ('gain' in r.exposure ? `exposure raised x${r.exposure.gain} in linear light (photo-inferred: ${r.exposure.why}); ` : `exposure kept (${r.exposure.reason}); `) : '';
-    return `hybrid: ${h.orthos.rectified} of ${h.orthos.facades} facade photos straightened; window fit ${h.windowFit.windows}; ${rd}; ${h.array.windows} windows after the arrays; ${sym}${ex}the stages took ${Math.round(h.ms / 1000)} s; `;
+    const g = r.report.piers?.gate, roofs = r.report.roofPatches ? `roofs drawn from the scan's photo seen from above (${r.report.roofPatches} cells at ${r.report.roofTexelM} m); ` : '';
+    const gate = g && g.seen ? `walls drawn from their storeys' repeats, the wall's own photo kept where it departs from them (${Math.round((g.texels / g.seen) * 1000) / 10}% of wall texels in ${g.regions} regions, ${g.refused.toLocaleString('en-US')} texels refused as smears); ` : '';
+    return `hybrid: ${h.orthos.rectified} of ${h.orthos.facades} facade photos straightened; window fit ${h.windowFit.windows}; ${rd}; ${h.array.windows} windows after the arrays; ${sym}${ex}${gate}${roofs}the stages took ${Math.round(h.ms / 1000)} s; `;
 }
 
 /** What the infer mode inferred, for the chat (every step that did not run says why). */

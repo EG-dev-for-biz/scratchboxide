@@ -164,6 +164,12 @@ struct Params {
     double scanDetailMinArea{0.5};     // ... in connected pieces of at least this much area (m^2)
     double scanDetailStepM{0};         // ... and only pieces standing at least this far out somewhere (a real step: crowns, fins, ornament; not a scan bulge)
     double orthoBlend{0};              // each wall's own photo blended over its storey median by this weight, where the two agree (unique detail kept)
+    int residualGate{0};               // in place of orthoBlend: the storey median (the repeats' prediction) everywhere, the wall's own photo only where it departs from it
+    double gateDeltaE{12};             // ... by at least this CIELAB difference, averaged over gateWindowM,
+    double gateWindowM{0.5};
+    double gateMinAreaM2{1.0};         // ... over a connected region of at least this area,
+    double gateDetail{0.8};            // ... where the photo's own local contrast is at least this share of the median's (a smear or hole is not kept)
+    double gateFeatherM{0.2};          // ... feathered over this width
     int atlasJpeg{0};
     int slenderTex{0};                 // the slender top's panels each take their own patch of the scan's photo in the atlas (not one colour a panel)
     int slenderRows{512};              // ... in this many atlas rows, reserved below the walls' textures
@@ -257,7 +263,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "patchRows") P.patchRows = static_cast<int>(v); else if (name == "patchTexelM") P.patchTexelM = v; else if (name == "patchMinArea") P.patchMinArea = v;
             else if (name == "roofRows") P.roofRows = static_cast<int>(v); else if (name == "roofTexelM") P.roofTexelM = v; else if (name == "roofGridM") P.roofGridM = v;
             else if (name == "slenderTex") P.slenderTex = static_cast<int>(v); else if (name == "slenderRows") P.slenderRows = static_cast<int>(v); else if (name == "slenderTexelM") P.slenderTexelM = v;
-            else if (name == "orthoBlend") P.orthoBlend = v; else if (name == "atlasJpeg") P.atlasJpeg = static_cast<int>(v);
+            else if (name == "orthoBlend") P.orthoBlend = v; else if (name == "residualGate") P.residualGate = static_cast<int>(v); else if (name == "gateDeltaE") P.gateDeltaE = v; else if (name == "gateWindowM") P.gateWindowM = v; else if (name == "gateMinAreaM2") P.gateMinAreaM2 = v; else if (name == "gateDetail") P.gateDetail = v; else if (name == "gateFeatherM") P.gateFeatherM = v; else if (name == "atlasJpeg") P.atlasJpeg = static_cast<int>(v);
             else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
             else if (name == "roofDetailMinArea") P.roofDetailMinArea = v; else if (name == "roofDetailStepM") P.roofDetailStepM = v; else if (name == "roofDetailEdgeM") P.roofDetailEdgeM = v;
             else if (name == "profileCoverage") P.profileCoverage = v; else if (name == "profileDensity") P.profileDensity = v;
@@ -581,7 +587,7 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
-    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, selfFilled{0}, slenderTexels{0}, patchFaces{0}, patchTexels{0}, patchOverflow{0};
+    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, gateTexels{0}, gateRegions{0}, gateRefused{0}, gateSeen{0}, selfFilled{0}, slenderTexels{0}, patchFaces{0}, patchTexels{0}, patchOverflow{0};
     std::vector<double> pierDepths;
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
@@ -1359,6 +1365,71 @@ inline Result build(Spec S) {
                 basePlane[fi] = id; break;
             }
         }
+        // The residual gate on one wall's texture (residualGate): t.M holds the storey median, the repeats' prediction; own3
+        // the wall's own photo. Their CIELAB difference, averaged over gateWindowM, marks where the photo departs from the
+        // prediction; such texels in a connected region of gateMinAreaM2 or more, where the photo's local contrast is at
+        // least gateDetail of the median's (a smear or a hole departs too, with less detail), keep the photo, feathered over
+        // gateFeatherM; everywhere else the median stands. Photo-inferred both ways (the median is of the same photo).
+        auto residualGateFace = [&](FaceTex& t, const std::vector<float>& own3) {
+            const int W = t.w, Hh = t.h; const size_t N = static_cast<size_t>(W) * Hh;
+            std::vector<double> d(N, 0), lo(N, 0), lm(N, 0); std::vector<uint8_t> both(N, 0);
+            for (size_t k = 0; k < N; ++k) {
+                if (t.M[k * 3] < 0 || own3[k * 3] < 0) continue;
+                const Rgb m{t.M[k * 3], t.M[k * 3 + 1], t.M[k * 3 + 2]}, o{own3[k * 3], own3[k * 3 + 1], own3[k * 3 + 2]};
+                const auto a = labOf(m), b = labOf(o);
+                d[k] = std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+                lm[k] = a[0]; lo[k] = b[0]; both[k] = 1;
+            }
+            // box sums over the window (integral images): mean difference, and each image's local contrast (L* stdev)
+            const int r = std::max(1, static_cast<int>(std::lround(S.P.gateWindowM / t.texel / 2)));
+            auto integral = [&](const std::vector<double>& v) { std::vector<double> I(static_cast<size_t>(W + 1) * (Hh + 1), 0); for (int y = 0; y < Hh; ++y) { double row = 0; for (int x = 0; x < W; ++x) { const size_t k = static_cast<size_t>(y) * W + x; row += both[k] ? v[k] : 0; I[static_cast<size_t>(y + 1) * (W + 1) + x + 1] = I[static_cast<size_t>(y) * (W + 1) + x + 1] + row; } } return I; };
+            std::vector<double> nb(N), lo2(N), lm2(N);
+            for (size_t k = 0; k < N; ++k) { nb[k] = 1; lo2[k] = lo[k] * lo[k]; lm2[k] = lm[k] * lm[k]; }
+            const auto In = integral(nb), Id = integral(d), Io = integral(lo), Io2 = integral(lo2), Im = integral(lm), Im2 = integral(lm2);
+            auto box = [&](const std::vector<double>& I, int x, int y) { const int x0 = std::max(0, x - r), x1 = std::min(W, x + r + 1), y0 = std::max(0, y - r), y1 = std::min(Hh, y + r + 1); return I[static_cast<size_t>(y1) * (W + 1) + x1] - I[static_cast<size_t>(y0) * (W + 1) + x1] - I[static_cast<size_t>(y1) * (W + 1) + x0] + I[static_cast<size_t>(y0) * (W + 1) + x0]; };
+            std::vector<uint8_t> cand(N, 0);
+            for (int y = 0; y < Hh; ++y) for (int x = 0; x < W; ++x) {
+                const size_t k = static_cast<size_t>(y) * W + x;
+                if (!both[k]) continue;
+                ++rep.gateSeen;
+                const double n = box(In, x, y);
+                if (n < 4) continue;
+                const double md = box(Id, x, y) / n;
+                if (md < S.P.gateDeltaE) continue;
+                const double mo = box(Io, x, y) / n, mm = box(Im, x, y) / n;
+                const double so = std::sqrt(std::max(0.0, box(Io2, x, y) / n - mo * mo)), sm = std::sqrt(std::max(0.0, box(Im2, x, y) / n - mm * mm));
+                if (so < S.P.gateDetail * sm) { ++rep.gateRefused; continue; }
+                cand[k] = 1;
+            }
+            // connected regions (4-neighbours) of at least gateMinAreaM2
+            const size_t minN = static_cast<size_t>(std::ceil(S.P.gateMinAreaM2 / (t.texel * t.texel)));
+            std::vector<uint8_t> keep(N, 0); std::vector<int> stack, region;
+            for (size_t s0 = 0; s0 < N; ++s0) {
+                if (cand[s0] != 1) continue;
+                region.clear(); stack.assign(1, static_cast<int>(s0)); cand[s0] = 2;
+                while (!stack.empty()) {
+                    const int k = stack.back(); stack.pop_back(); region.push_back(k);
+                    const int x = k % W, y = k / W;
+                    const int nbs[4][2] = {{x - 1, y}, {x + 1, y}, {x, y - 1}, {x, y + 1}};
+                    for (const auto& q : nbs) { if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= Hh) continue; const size_t kk = static_cast<size_t>(q[1]) * W + q[0]; if (cand[kk] == 1) { cand[kk] = 2; stack.push_back(static_cast<int>(kk)); } }
+                }
+                if (region.size() < minN) continue;
+                ++rep.gateRegions;
+                for (int k : region) keep[k] = 1;
+            }
+            // feather: each texel's weight falls from 1 at a kept texel to 0 at gateFeatherM away (a chamfer distance)
+            const int F = std::max(1, static_cast<int>(std::lround(S.P.gateFeatherM / t.texel)));
+            std::vector<int> dist(N, 1 << 20);
+            for (size_t k = 0; k < N; ++k) if (keep[k]) dist[k] = 0;
+            for (int y = 0; y < Hh; ++y) for (int x = 0; x < W; ++x) { int& v = dist[static_cast<size_t>(y) * W + x]; if (x) v = std::min(v, dist[static_cast<size_t>(y) * W + x - 1] + 1); if (y) v = std::min(v, dist[static_cast<size_t>(y - 1) * W + x] + 1); }
+            for (int y = Hh - 1; y >= 0; --y) for (int x = W - 1; x >= 0; --x) { int& v = dist[static_cast<size_t>(y) * W + x]; if (x + 1 < W) v = std::min(v, dist[static_cast<size_t>(y) * W + x + 1] + 1); if (y + 1 < Hh) v = std::min(v, dist[static_cast<size_t>(y + 1) * W + x] + 1); }
+            for (size_t k = 0; k < N; ++k) {
+                if (!both[k] || dist[k] > F) continue;
+                const double wgt = 1.0 - static_cast<double>(dist[k]) / (F + 1);
+                for (int c = 0; c < 3; ++c) t.M[k * 3 + c] = static_cast<float>((1 - wgt) * t.M[k * 3 + c] + wgt * own3[k * 3 + c]);
+                if (keep[k]) ++rep.gateTexels;
+            }
+        };
         double texel = S.P.detailTexelM;
         const int A = S.P.detailAtlas;
         for (int attempt = 0; attempt < 12; ++attempt, texel *= 1.15) {
@@ -1426,6 +1497,9 @@ inline Result build(Spec S) {
                     return true;
                 };
                 std::vector<double> vr, vg, vb;
+                // the residual gate's evidence: the wall's own photo per texel (-1: none)
+                std::vector<float> own3;
+                if (S.P.residualGate) own3.assign(static_cast<size_t>(t.w) * t.h * 3, -1.0f);
                 for (int j = 0; j < t.h; ++j) for (int i = 0; i < t.w; ++i) {
                     const double a = (i + 0.5) * t.texel, h = t.h1 - (j + 0.5) * t.texel;
                     vr.clear(); vg.clear(); vb.clear();
@@ -1442,7 +1516,9 @@ inline Result build(Spec S) {
                     // the wall's own photo at this texel, over the median where the two agree (within a factor of 1.6 in
                     // luminance: not a smear, hole or stray reflection): what does not repeat stays on the wall
                     Rgb own;
-                    if (S.P.orthoBlend > 0 && texelAt(a, h, own)) {
+                    if (S.P.residualGate) {
+                        if (texelAt(a, h, own)) { own3[o] = static_cast<float>(own.r); own3[o + 1] = static_cast<float>(own.g); own3[o + 2] = static_cast<float>(own.b); }
+                    } else if (S.P.orthoBlend > 0 && texelAt(a, h, own)) {
                         const double lm = 0.2126 * m3[0] + 0.7152 * m3[1] + 0.0722 * m3[2], lo = 0.2126 * own.r + 0.7152 * own.g + 0.0722 * own.b;
                         if (lm > 1e-4 && lo > 1e-4 && lo / lm < 1.6 && lm / lo < 1.6) {
                             const double wgt = S.P.orthoBlend;
@@ -1453,6 +1529,7 @@ inline Result build(Spec S) {
                     t.M[o] = static_cast<float>(m3[0]); t.M[o + 1] = static_cast<float>(m3[1]); t.M[o + 2] = static_cast<float>(m3[2]);
                     ++rep.texelsDetail;
                 }
+                if (S.P.residualGate) residualGateFace(t, own3);
                 t.ok = true;
                 ++rep.facesTextured;
             }
@@ -3247,7 +3324,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"
-      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"selfFilled\":" << r.selfFilled << ",\"slenderTexels\":" << r.slenderTexels << ",\"patchFaces\":" << r.patchFaces << ",\"patchTexels\":" << r.patchTexels << ",\"patchOverflow\":" << r.patchOverflow << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
+      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"gate\":{\"texels\":" << r.gateTexels << ",\"regions\":" << r.gateRegions << ",\"refused\":" << r.gateRefused << ",\"seen\":" << r.gateSeen << "}" << ",\"selfFilled\":" << r.selfFilled << ",\"slenderTexels\":" << r.slenderTexels << ",\"patchFaces\":" << r.patchFaces << ",\"patchTexels\":" << r.patchTexels << ",\"patchOverflow\":" << r.patchOverflow << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";

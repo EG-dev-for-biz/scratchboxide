@@ -230,12 +230,17 @@ describe.skipIf(!fs.existsSync(RUN))('the hybrid twin of a real staged run (ESB)
         expect(h.array.windows).toBeGreaterThan(h.windowFit.windows);
         expect(fs.existsSync(path.join(outDir, 'hybrid', 'relief_orthos'))).toBe(true);
         const spec = fs.readFileSync(r.specFile, 'utf8').split('\n');
-        for (const l of ['param selfFill 1', 'param slenderTex 1', 'param orthoBlend 0.6', 'param scanDetailStepM 0.6', 'param atlasJpeg 1', 'param roofRows 768']) expect(spec).toContain(l);
+        for (const l of ['param selfFill 1', 'param slenderTex 1', 'param residualGate 1', 'param scanDetailStepM 0.6', 'param atlasJpeg 1', 'param roofRows 768']) expect(spec).toContain(l);
         expect(spec.some(l => l.startsWith('win '))).toBe(true);
         // no model: the window fit and arrays alone (with the reader and system, cold, 4,418 on the twin)
         expect(r.report.windows.placed).toBeGreaterThan(1000);
-        // every wall textured: K's photo blended in where one stands on it, its own scan photo elsewhere
-        expect(r.report.piers!.orthoTexels).toBeGreaterThan(1_000_000);
+        // the residual gate: the walls drawn from the storey median, the wall's own photo kept only where it departs from
+        // it in regions with detail of their own (a small share), smears refused
+        const g = r.report.piers!.gate!;
+        expect(g.seen).toBeGreaterThan(1_000_000);
+        expect(g.texels).toBeGreaterThan(10_000);
+        expect(g.texels / g.seen).toBeLessThan(0.3);
+        expect(g.refused).toBeGreaterThan(0);
         expect(r.report.piers!.selfFilled).toBeGreaterThan(0);
         // the mast's panels carry the scan's photo, not one colour each
         expect(r.report.piers!.slenderTexels).toBeGreaterThan(100_000);
