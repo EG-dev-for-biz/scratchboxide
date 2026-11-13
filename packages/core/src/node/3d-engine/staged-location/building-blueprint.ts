@@ -42,6 +42,7 @@ import { CARDINAL_VIEWS, classifyEdges, FACING_EPS, LINE_DRAWING_PARAMS, photoEd
 import type { TileTriangles } from './tile-texture-transfer';
 import { encodePng } from './png-encode';
 import type { SymmetryReport } from './pipeline-k/symmetry';
+import type { StructureIntent, IntentSource } from './structure-intent';
 
 type Rect = [number, number, number, number];
 
@@ -61,6 +62,8 @@ export interface BlueprintInputs {
     structureFill?: Float32Array | Float64Array;
     /** The textured scan: its photo's strongest edges drawn as the lightest layer, under the constructed lines (detail the readings do not hold: ornament, frames, texture). Photo-inferred. */
     photo?: TileTriangles;
+    /** The design intent (structure-intent.ts): when given, each facade's windows are drawn from it (repeats, mirrors and twins inferred, each region's organisation decided) in place of the module snap. */
+    intent?: StructureIntent;
     title?: string;
     note?: string;
 }
@@ -69,6 +72,8 @@ export const BLUEPRINT_PARAMS = {
     pixelM: 0.1, maxDimPx: 4096, creaseDeg: 25, minEdgeLenM: 0.3, depthEpsM: 0.08,
     /** Outline edges kept within this angle (degrees) of the view's axes. */
     axisDeg: 3,
+    /** An outline line is not drawn where another already runs within this many pixels beside it (a silhouette, drawn with a wider brush, within 2 more): flutes, ribs and louvres closer than the drawing can show read as the surface, not as lines. Silhouettes are drawn first. */
+    creaseCrowdPx: 2,
     /** A facade or wall faces a view when its normal is within this angle (degrees) of the view's back direction. */
     facingDeg: 25,
     /** An element is drawn when it stands at most this far behind the surface the viewer sees there. */
@@ -89,7 +94,13 @@ export const BLUEPRINT_PARAMS = {
     snapToModule: true, moduleTol: 0.35,
     /** 'ink': black on white; 'blueprint': white on blue. */
     scheme: 'ink' as 'ink' | 'blueprint',
-    gridM: 10, marginPx: 150, titlePx: 170
+    gridM: 10, marginPx: 150, titlePx: 170,
+    /** The material ID map: a window's frame this wide (m) around its glass and along its mullions; the bare surface judged in blocks of matBlockM, each block taking its neighbourhood's majority; element groups of one role within matDeltaE (CIELAB) are one material, the bare surface's within matDeltaESurface; a material under matMinShare of its role's area joins its nearest. */
+    frameM: 0.08, matBlockM: 1, matDeltaE: 6, matDeltaESurface: 7, matMinShare: 0.03,
+    /** Lightness counts this much against chroma (taken relative to lightness) in the material distance: shade and exposure change a material's lightness, a different material its hue (the lighting reads as one material lit differently); a 50-unit lightness step still splits. */
+    matLightWeight: 0.15,
+    /** The bare surface's majority vote: over a (2r + 1)^2 block neighbourhood, this many passes. */
+    matSmoothR: 2, matSmoothPasses: 3
 };
 export type BlueprintParams = typeof BLUEPRINT_PARAMS;
 
@@ -101,11 +112,34 @@ export interface BlueprintReport {
         /** Windows and bays not drawn because another facade's reading had already drawn one on the same spot. */
         duplicatesSkipped: number; photoEdgePixels: number;
         mirroredWindows: number; facadeAxes: number; planAxes: number; levels: number[]; extentM: [number, number];
+        /** Windows drawn by provenance (with an intent). */
+        bySource?: Partial<Record<IntentSource, number>>;
     }>;
+    /** The material ID map's materials, one table for every view (the same ID is the same material in each). */
+    materials?: MaterialEntry[];
     ms: number;
 }
 
-export const BLUEPRINT_VERSION = 'building-blueprint/4';
+export const BLUEPRINT_VERSION = 'building-blueprint/5';
+
+/** One material of the ID map: its role in the drawing (the element kind it fills: wall, roof, bay, spandrel, glass, frame; open labels), its colour in the ID map, its mean colour in the photo (sRGB, the albedo estimate; absent where the photo never reached), and how it was assigned. */
+export interface MaterialEntry { id: number; role: string; idColor: [number, number, number]; photoColor?: [number, number, number]; lab?: [number, number, number]; areaM2: number; groups: number; provenance: 'photo-inferred' | 'generated'; reason: string }
+
+/** An element instance the ID map is built from: its role, the group it shares a material with (a facade's window family, a wall's bays, a surface block), and its photo colour sums. */
+interface MatInstance { role: string; group: string; n: number; c: number; L: number; A: number; B: number }
+interface MatSheet { inst: Int32Array; dw: number; dh: number; M: number; pixelM: number; groups: MatInstance[]; blocks: { bw: number; bh: number; px: number; group: Int32Array } }
+
+const linearToSrgb8 = (c: number) => Math.round(255 * Math.min(1, Math.max(0, c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055)));
+function linToLab(r: number, g: number, b: number): [number, number, number] {
+    const x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047, y = 0.2126 * r + 0.7152 * g + 0.0722 * b, z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+    const f = (t: number) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+    return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+}
+function labToLin(L: number, a: number, b: number): [number, number, number] {
+    const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200, inv = (t: number) => (t ** 3 > 216 / 24389 ? t ** 3 : (116 * t - 16) / (24389 / 27));
+    const x = inv(fx) * 0.95047, y = inv(fy), z = inv(fz) * 1.08883;
+    return [3.2406 * x - 1.5372 * y - 0.4986 * z, -0.9689 * x + 1.8758 * y + 0.0415 * z, 0.0557 * x - 0.204 * y + 1.057 * z];
+}
 
 const SCHEMES = { ink: { bg: [255, 255, 255] as Vec3, ink: [16, 16, 16] as Vec3 }, blueprint: { bg: [24, 60, 116] as Vec3, ink: [236, 243, 255] as Vec3 } };
 
@@ -212,7 +246,7 @@ function svgOf(sheet: Sheet, bg: Vec3): string {
         + `<g stroke="${rgb(sheet.inkC)}" fill="${rgb(sheet.inkC)}" stroke-linecap="square" font-family="monospace">${sheet.vec.join('')}</g></svg>`;
 }
 
-function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number, depthMesh: Mesh = m): { png: Sheet; stats: BlueprintReport['views'][number] } {
+function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number, depthMesh: Mesh = m): { png: Sheet; stats: BlueprintReport['views'][number]; mat: MatSheet } {
     const { forward, right, up } = view, isPlan = Math.abs(forward[1]) > 0.9, sc = SCHEMES[P.scheme];
     const u = (i: number) => m.P[3 * i] * right[0] + m.P[3 * i + 1] * right[1] + m.P[3 * i + 2] * right[2];
     const v = (i: number) => m.P[3 * i] * up[0] + m.P[3 * i + 1] * up[1] + m.P[3 * i + 2] * up[2];
@@ -239,6 +273,22 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     const seg = (a: Vec3, b: Vec3, alpha: number, r: number, pattern?: number[]) => line(sheet, X(dot(a, right)), Y(dot(a, up)), X(dot(b, right)), Y(dot(b, up)), alpha, r, pattern);
     const quad = (q: Vec3[], alpha: number, r: number, pattern?: number[]) => { for (let k = 0; k < 4; k++) seg(q[k], q[(k + 1) % 4], alpha, r, pattern); };
     const seen = (p: Vec3) => onSurface(dot(p, right), dot(p, up), dot(p, forward), P.windowDepthM);
+    // the material ID map's raster: each drawing pixel's element group (a facade family's glass or frame, a wall's bays, a surface block), painted in drawing order
+    const inst = new Int32Array(dw * dh).fill(-1), groups: MatInstance[] = [], groupIx = new Map<string, number>();
+    const groupOf = (role: string, key: string) => { const k = `${role}:${key}`; let g = groupIx.get(k); if (g === undefined) { g = groups.length; groups.push({ role, group: k, n: 0, c: 0, L: 0, A: 0, B: 0 }); groupIx.set(k, g); } return g; };
+    const fillQuad = (q: Vec3[], g: number) => {
+        const xs = q.map(p => col(dot(p, right))), ys = q.map(p => row(dot(p, up)));
+        const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(dw - 1, Math.ceil(Math.max(...xs))), y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(dh - 1, Math.ceil(Math.max(...ys)));
+        const sgn = Math.sign((xs[1] - xs[0]) * (ys[2] - ys[0]) - (ys[1] - ys[0]) * (xs[2] - xs[0])) || 1;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const px = x + 0.5, py = y + 0.5;
+            let inside = true;
+            for (let k = 0; k < q.length && inside; k++) { const a = k, b = (k + 1) % q.length; if (sgn * ((xs[b] - xs[a]) * (py - ys[a]) - (ys[b] - ys[a]) * (px - xs[a])) < -1e-6) inside = false; }
+            if (inside && Number.isFinite(depth[y * dw + x])) inst[y * dw + x] = g;
+        }
+    };
+    const rgbPhoto = inputs.photo ? new Float32Array(dw * dh * 3) : undefined;
+    const bySource: Partial<Record<IntentSource, number>> = {};
 
     if (P.scheme === 'blueprint') {
         for (let g = Math.ceil(uMin / P.gridM) * P.gridM; g <= uMax; g += P.gridM) line(sheet, X(g), M, X(g), M + dh, 0.07);
@@ -248,8 +298,9 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
 
     // 0. the photo's detail, lightest and under everything
     let photoEdgePixels = 0;
+    if (inputs.photo && isPlan) photoEdges(inputs.photo, view, dw, dh, col, row, LINE_DRAWING_PARAMS, rgbPhoto);
     if (inputs.photo && !isPlan) {
-        const pe = photoEdges(inputs.photo, view, dw, dh, col, row, LINE_DRAWING_PARAMS);
+        const pe = photoEdges(inputs.photo, view, dw, dh, col, row, LINE_DRAWING_PARAMS, rgbPhoto);
         const layer = new Uint8Array(dw * dh * 4);
         for (let i = 0; i < dw * dh; i++) if (pe.edge[i]) { ink(sheet, M + (i % dw), M + Math.floor(i / dw), TONE.photo); photoEdgePixels++; layer.set([...sc.ink, Math.round(255 * TONE.photo)], 4 * i); }
         // in the SVG the hairlines are one image under the vectors (a vector a pixel would be no drawing)
@@ -282,6 +333,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             const bq = [at(b.u0, b.y0), at(b.u1, b.y0), at(b.u1, b.y1), at(b.u0, b.y1)], bb = boxOf(bq);
             if (taken('bay', bb, 0.5)) { duplicatesSkipped++; continue; }
             claim('bay', bb);
+            fillQuad(bq, groupOf('bay', `wall${w.wallId}`));
             quad(bq, TONE.structure, medium);
             const r = Math.min(P.revealM, (b.u1 - b.u0) / 4);
             quad([at(b.u0 + r, b.y0), at(b.u1 - r, b.y0), at(b.u1 - r, b.y1 - r), at(b.u0 + r, b.y1 - r)], TONE.fine, 0);
@@ -303,25 +355,37 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         const rectWorld = (r: number[]) => { const s0 = toS(r[0]), s1 = toS(r[2]), t0 = toT(r[3]), t1 = toT(r[1]); return { s0, s1, t0, t1, q: [world(s0, t0), world(s1, t0), world(s1, t1), world(s0, t1)] }; };
         const visibleRect = (r: number[]) => { const g = rectWorld(r); return seen(world((g.s0 + g.s1) / 2, (g.t0 + g.t1) / 2)) ? g : undefined; };
         let any = false;
-        const drawn: Array<{ s0: number; s1: number; t0: number; t1: number }> = [];
+        const drawn: Array<{ s0: number; s1: number; t0: number; t1: number; family: number }> = [];
         const mine: number[][] = [];
-        const mod = P.snapToModule ? moduleOf(fc) : undefined;
-        for (const r of mod ? mod.rects : fc.rects) {
+        // the windows: from the design intent when given (each region's organisation decided, repeats, mirrors and twins inferred), else the module snap, else as read
+        const fi = inputs.intent?.facades.find(x => x.facadeId === fc.facadeId);
+        const mod = !fi && P.snapToModule ? moduleOf(fc) : undefined;
+        const items: Array<{ r: number[]; panes: number; family: number; source: IntentSource }> = fi ? fi.windows.map(w => ({ r: w.rect, panes: w.panes, family: w.family, source: w.source }))
+            : mod ? mod.rects.map((r, k) => ({ r, panes: mod.panes[k], family: 0, source: 'measured' as IntentSource })) : fc.rects.map(r => ({ r, panes: 0, family: 0, source: 'measured' as IntentSource }));
+        const frameS = (g: { s0: number; s1: number; t0: number; t1: number }) => Math.min(P.frameM, (g.s1 - g.s0) / 4, (g.t1 - g.t0) / 4);
+        for (const it of items) {
+            const r = it.r;
             const g = visibleRect(r);
             if (!g) continue;
             const wb = boxOf(g.q);
             if (taken('window', wb, 0.3)) { duplicatesSkipped++; continue; }
             claim('window', wb); mine.push(wb);
+            const fr = frameS(g);
+            fillQuad(g.q, groupOf('frame', `${fc.facadeId}.${it.family}`));
+            fillQuad([world(g.s0 + fr, g.t0 + fr), world(g.s1 - fr, g.t0 + fr), world(g.s1 - fr, g.t1 - fr), world(g.s0 + fr, g.t1 - fr)], groupOf('glass', `${fc.facadeId}.${it.family}`));
+            bySource[it.source] = (bySource[it.source] ?? 0) + 1;
             quad(g.q, TONE.opening, 0);
             line(sheet, X(dot(world(g.s0 - P.sillM, g.t0), right)), Y(dot(world(g.s0 - P.sillM, g.t0), up)), X(dot(world(g.s1 + P.sillM, g.t0), right)), Y(dot(world(g.s1 + P.sillM, g.t0), up)), TONE.opening, 0);
-            windows++; sills++; any = true; drawn.push(g);
+            windows++; sills++; any = true; drawn.push({ ...g, family: it.family });
         }
         // the mullions: with the module, each window split evenly at its column's pane count; else the reading's panes
-        if (mod) for (const [r, nPanes] of mod.rects.map((r, k) => [r, mod.panes[k]] as const)) {
+        if (fi || mod) for (const it of items) {
+            const nPanes = it.panes;
             if (nPanes < 2) continue;
-            const g = rectWorld(r), b = boxOf(g.q);
+            const g = rectWorld(it.r), b = boxOf(g.q);
             if (!mine.some(o => o[0] === b[0] && o[1] === b[1] && o[2] === b[2] && o[3] === b[3])) continue;
-            for (let k = 1; k < nPanes; k++) { const sx = g.s0 + ((g.s1 - g.s0) * k) / nPanes; seg(world(sx, g.t0), world(sx, g.t1), TONE.fine, 0); }
+            const fr = frameS(g), fg = groupOf('frame', `${fc.facadeId}.${it.family}`);
+            for (let k = 1; k < nPanes; k++) { const sx = g.s0 + ((g.s1 - g.s0) * k) / nPanes; seg(world(sx, g.t0), world(sx, g.t1), TONE.fine, 0); fillQuad([world(sx - fr / 2, g.t0), world(sx + fr / 2, g.t0), world(sx + fr / 2, g.t1), world(sx - fr / 2, g.t1)], fg); }
             panes += nPanes;
         }
         else for (const p of fc.panes ?? []) {
@@ -348,13 +412,14 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             const s0 = Math.max(a.s0, below.s0) + P.spandrelInsetM, s1 = Math.min(a.s1, below.s1) - P.spandrelInsetM, t0 = below.t1 + P.spandrelInsetM, t1 = a.t0 - P.spandrelInsetM;
             if (s1 - s0 < 0.2 || t1 - t0 < 0.15) continue;
             quad([world(s0, t0), world(s1, t0), world(s1, t1), world(s0, t1)], TONE.fine, 0);
+            fillQuad([world(s0, t0), world(s1, t0), world(s1, t1), world(s0, t1)], groupOf('spandrel', `${fc.facadeId}.${a.family}`));
             spandrels++;
         }
         // the facade's own mirror: its axis, and each window's mirror into a site no window touches
         const rd = readingOf(fc.facadeId);
         if (rd && rd.detected && !rd.periodic && rd.axisS !== undefined && (rd.ncc ?? 0) >= P.mirrorNcc) {
             const a = rd.axisS, toX = (s: number) => (s - f.orthoSMin) / f.pixel;
-            for (const r of fc.rects) {
+            if (!fi) for (const r of fc.rects) {
                 const mr = [toX(2 * a - toS(r[2])), r[1], toX(2 * a - toS(r[0])), r[3]];
                 if (mr[0] < 0 || mr[2] > f.width || fc.rects.some(o => iou(o, mr) > 0)) continue;
                 const g = visibleRect(mr);
@@ -376,12 +441,21 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     const edges = classifyEdges(m, forward, Math.cos((P.creaseDeg * Math.PI) / 180), P.minEdgeLenM).filter(e => e.kind !== 'boundary');
     const levelBins = new Map<number, number>();
     let outlineEdges = 0, ledges = 0;
-    for (const e of edges) {
+    // silhouettes first, so a crease crowding one gives way to it; each drawn pixel remembers its edge
+    edges.sort((a, b) => (a.kind === 'silhouette' ? 0 : 1) - (b.kind === 'silhouette' ? 0 : 1));
+    const outEdge = new Int32Array(dw * dh).fill(-1);
+    const crowded = (uu: number, vv: number, vertical: boolean, e: number, r: number) => {
+        const x = Math.round(col(uu)), y = Math.round(row(vv));
+        for (let k = -r; k <= r; k++) { if (!k) continue; const xx = vertical ? x + k : x, yy = vertical ? y : y + k; if (xx < 0 || yy < 0 || xx >= dw || yy >= dh) continue; const o = outEdge[yy * dw + xx]; if (o >= 0 && o !== e) return true; }
+        return false;
+    };
+    for (let ei = 0; ei < edges.length; ei++) {
+        const e = edges[ei];
         const ua = u(e.a), va = v(e.a), ub = u(e.b), vb = v(e.b), len = Math.hypot(ub - ua, vb - va);
         if (!(len > 0) || Math.min(Math.abs(ub - ua), Math.abs(vb - va)) / len > sinAxis) continue;
         const da = d(e.a), db = d(e.b), n = Math.max(1, Math.round((len / pixelM) * 1.3));
         const horizontal = !isPlan && Math.abs(vb - va) <= sinAxis * len;
-        let drawnPx = 0, run = -1;
+        let drawnPx = 0, visPx = 0, run = -1;
         const flush = (endS: number) => {
             if (run < 0) return;
             const f0 = run / n, f1 = endS / n, x0 = X(ua + (ub - ua) * f0), y0 = Y(va + (vb - va) * f0), x1 = X(ua + (ub - ua) * f1), y1 = Y(va + (vb - va) * f1);
@@ -391,17 +465,21 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         };
         for (let s = 0; s <= n; s++) {
             const f = s / n, uu = ua + (ub - ua) * f, vv = va + (vb - va) * f;
-            if (!visibleAt(uu, vv, da + (db - da) * f, P.depthEpsM)) { flush(s - 1); continue; }
+            const vis = visibleAt(uu, vv, da + (db - da) * f, P.depthEpsM);
+            if (vis) visPx++;
+            // the crowding is the drawing's (what a line can show); the levels below count every visible run, crowded or not
+            if (!vis || crowded(uu, vv, !horizontal, ei, e.kind === 'silhouette' ? P.creaseCrowdPx + 2 : P.creaseCrowdPx)) { flush(s - 1); continue; }
             if (run < 0) run = s;
+            { const x = Math.round(col(uu)), y = Math.round(row(vv)); if (x >= 0 && y >= 0 && x < dw && y < dh) outEdge[y * dw + x] = ei; }
             ink(sheet, X(uu), Y(vv), 1, e.kind === 'silhouette' ? heavy : medium);
             if (horizontal && len >= P.ledgeMinM) ink(sheet, X(uu), Y(vv - P.ledgeM), TONE.opening, 0);
             drawnPx++;
         }
         flush(n);
+        if (horizontal && visPx) { const bin = Math.round(((va + vb) / 2) / P.levelBinM); levelBins.set(bin, (levelBins.get(bin) ?? 0) + (visPx / (n + 1)) * len); }
         if (!drawnPx) continue;
         outlineEdges++;
         if (horizontal && len >= P.ledgeMinM) ledges++;
-        if (horizontal) { const bin = Math.round(((va + vb) / 2) / P.levelBinM); levelBins.set(bin, (levelBins.get(bin) ?? 0) + (drawnPx / (n + 1)) * len); }
     }
 
     // 4. the building's plan mirrors as centre lines
@@ -464,22 +542,135 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         `${(inputs.title ?? 'BUILDING').toUpperCase()}  -  ${label}`,
         `1 PX = ${pixelM.toFixed(3)} M. VIEWS SQUARE TO THE WALLS (${azimuth.toFixed(1)} DEG). LEVELS IN METRES ABOVE THE LOWEST POINT.${inputs.note ? ` ${inputs.note.toUpperCase()}` : ''}`,
         'HEAVY: SILHOUETTE. FULL TONE: CREASES, LEDGES (DOUBLED) AND RECESSED BAYS. LIGHTER: WINDOWS AND SILLS. LIGHTEST: REVEALS, MULLIONS, SPANDREL PANELS.',
-        'OUTLINE AND LEVELS MEASURED FROM THE SCAN. BAYS, WINDOWS, PANES AND SPANDRELS INFERRED FROM THE FACADE PHOTOS, AND THE FAINT HAIRLINES TRACED FROM THEM (PHOTO-INFERRED). DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY.'
+        'OUTLINE AND LEVELS MEASURED FROM THE SCAN. BAYS, WINDOWS, PANES AND SPANDRELS INFERRED FROM THE FACADE PHOTOS, AND THE FAINT HAIRLINES TRACED FROM THEM (PHOTO-INFERRED). ' + (inputs.intent ? 'WINDOWS DRAWN FROM THE DESIGN INTENT: EACH REGION REPEATING, SYMMETRIC OR NEITHER, WHAT THE PHOTOS MISSED INFERRED FROM THE REPEAT, THE MIRROR OR A TWIN FACADE (SEE STRUCTURE_INTENT.JSON). DASH-DOT: AXIS OF SYMMETRY.' : 'DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY.')
     ];
     const small = Math.max(1, ts - 1), chars = Math.floor((tbW - 20) / (6 * small));
     text(sheet, tbX + 10, tbY + 6, wrapTo(rows[0], Math.floor((tbW - 20) / (6 * ts)))[0], ts);
     rows.slice(1).flatMap(r => wrapTo(r, chars)).slice(0, Math.floor((tbH - 14 * ts - 16) / (10 * small))).forEach((r, i) => text(sheet, tbX + 10, tbY + 14 * ts + 12 + i * 10 * small, r, small));
+    // the bare surface in blocks: each block its own group (the materials stage merges them by colour and smooths them by neighbourhood)
+    const bpx = Math.max(1, Math.round(P.matBlockM / pixelM)), bw = Math.ceil(dw / bpx), bh = Math.ceil(dh / bpx), blockGroup = new Int32Array(bw * bh).fill(-1);
+    const surfaceRole = isPlan ? 'roof' : 'wall';
+    for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
+        const i = y * dw + x;
+        if (inst[i] >= 0 || !Number.isFinite(depth[i])) continue;
+        const b = Math.floor(y / bpx) * bw + Math.floor(x / bpx);
+        if (blockGroup[b] < 0) blockGroup[b] = groupOf(surfaceRole, `${view.name}.${b}`);
+        inst[i] = blockGroup[b];
+    }
+    for (let i = 0; i < dw * dh; i++) {
+        const g = inst[i]; if (g < 0) continue;
+        const G = groups[g]; G.n++;
+        if (rgbPhoto && Number.isFinite(rgbPhoto[3 * i])) { const [L, A, B] = linToLab(rgbPhoto[3 * i], rgbPhoto[3 * i + 1], rgbPhoto[3 * i + 2]); G.c++; G.L += L; G.A += A; G.B += B; }
+    }
     return {
+        mat: { inst, dw, dh, M, pixelM, groups, blocks: { bw, bh, px: bpx, group: blockGroup } },
         png: sheet,
-        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, duplicatesSkipped, photoEdgePixels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10] }
+        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, duplicatesSkipped, photoEdgePixels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10], ...(inputs.intent ? { bySource } : {}) }
     };
 }
 
 /**
- * The elevation set of a scan (a triangle soup in the frame its facades, walls and symmetry are read in): four
- * elevations square to its walls (A to D) and the roof plan, constructed from what `inputs` gives.
+ * The material ID map's materials, over every view at once (one ID is one material in each): each role's element groups
+ * merged by colour (CIELAB, leader clustering, the best-photographed first), a material too small to stand joins its
+ * nearest, groups the photo never reached take their role's largest material (generated), and the bare surface's blocks
+ * take their neighbourhood's majority, so a stain or a shadow inside a wall is the wall's material, not its own.
  */
-export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string }> } {
+function assignMaterials(mats: MatSheet[], P: BlueprintParams): { entries: MaterialEntry[]; perView: Int32Array[] } {
+    type Mat = { id: number; role: string; L: number; A: number; B: number; w: number; n: number; groups: number; px: number };
+    const mats2: Mat[] = [], gMat = mats.map(m => new Int32Array(m.groups.length).fill(-1));
+    const all = mats.flatMap((m, v) => m.groups.map((g, k) => ({ v, k, g, px: m.pixelM * m.pixelM })));
+    // chroma relative to lightness: a material in shade keeps its hue and its chroma's share of its lightness, both shrinking together
+    const rel = (c: number, L: number) => (c * 60) / Math.max(15, L);
+    const de = (a: { L: number; A: number; B: number }, b: { L: number; A: number; B: number }) => Math.hypot(P.matLightWeight * (a.L - b.L), rel(a.A, a.L) - rel(b.A, b.L), rel(a.B, a.L) - rel(b.B, b.L));
+    const roles = [...new Set(all.map(x => x.g.role))];
+    for (const role of roles) {
+        const surface = role === 'wall' || role === 'roof', thr = surface ? P.matDeltaESurface : P.matDeltaE;
+        const mine = all.filter(x => x.g.role === role), lit = mine.filter(x => x.g.c >= Math.max(1, 0.2 * x.g.n)).sort((a, b) => b.g.c - a.g.c);
+        const roleMats: Mat[] = [];
+        for (const x of lit) {
+            const c = { L: x.g.L / x.g.c, A: x.g.A / x.g.c, B: x.g.B / x.g.c };
+            let best: Mat | undefined, bd = Infinity;
+            for (const m of roleMats) { const d = de(m, c); if (d < bd) { bd = d; best = m; } }
+            if (!best || bd > thr) { best = { id: -1, role, L: c.L, A: c.A, B: c.B, w: 0, n: 0, groups: 0, px: 0 }; roleMats.push(best); }
+            const w = x.g.c; best.L = (best.L * best.w + c.L * w) / (best.w + w); best.A = (best.A * best.w + c.A * w) / (best.w + w); best.B = (best.B * best.w + c.B * w) / (best.w + w); best.w += w;
+            best.n += x.g.n; best.px += x.g.n * x.px; best.groups++;
+            gMat[x.v][x.k] = roleMats.indexOf(best);
+        }
+        const into = roleMats.map((_, i) => i);
+        const root = (i: number): number => (into[i] === i ? i : (into[i] = root(into[i])));
+        // the leader pass's centres drift as members join: two that end within the threshold are one material (closest pair first)
+        for (;;) {
+            let bi = -1, bj = -1, bd = thr;
+            for (let i = 0; i < roleMats.length; i++) if (root(i) === i && roleMats[i].n) for (let j = i + 1; j < roleMats.length; j++) if (root(j) === j && roleMats[j].n) { const d = de(roleMats[i], roleMats[j]); if (d < bd) { bd = d; bi = i; bj = j; } }
+            if (bi < 0) break;
+            const a = roleMats[bi], b = roleMats[bj], w = a.w + b.w || 1;
+            a.L = (a.L * a.w + b.L * b.w) / w; a.A = (a.A * a.w + b.A * b.w) / w; a.B = (a.B * a.w + b.B * b.w) / w; a.w += b.w; a.n += b.n; a.px += b.px; a.groups += b.groups; b.n = 0; into[bj] = bi;
+        }
+        // too small to stand: joins its nearest (the indices into roleMats are remapped below)
+        const total = roleMats.reduce((a, m) => a + m.n, 0);
+        for (let i = 0; i < roleMats.length; i++) {
+            if (root(i) !== i || roleMats[i].n >= P.matMinShare * total) continue;
+            let best = -1, bd = Infinity;
+            roleMats.forEach((o, j) => { if (j !== i && root(j) === j && o.n >= P.matMinShare * total) { const d = de(o, roleMats[i]); if (d < bd) { bd = d; best = j; } } });
+            if (best >= 0) { into[i] = best; const o = roleMats[best]; o.n += roleMats[i].n; o.px += roleMats[i].px; o.groups += roleMats[i].groups; roleMats[i].n = 0; }
+        }
+        const largest = roleMats.length ? roleMats.reduce((bi, m, i, a) => (m.n > a[bi].n ? i : bi), 0) : -1;
+        let unlit: Mat | undefined;
+        for (const x of mine) {
+            let ix = gMat[x.v][x.k];
+            if (ix >= 0) ix = root(ix);
+            else if (!surface) {
+                // the photo never reached it: its role's largest material, else one unlit material for the role
+                if (largest >= 0) ix = largest;
+                else { if (!unlit) { unlit = { id: -1, role, L: NaN, A: NaN, B: NaN, w: 0, n: 0, groups: 0, px: 0 }; roleMats.push(unlit); } ix = roleMats.indexOf(unlit); }
+                roleMats[ix].groups++; roleMats[ix].n += x.g.n; roleMats[ix].px += x.g.n * x.px;
+            }
+            gMat[x.v][x.k] = ix >= 0 ? mats2.length + ix : -1;
+        }
+        mats2.push(...roleMats);
+    }
+    // the bare surface: each block takes its neighbourhood's majority (matSmoothR, matSmoothPasses), an unlit block the majority around it, else its role's largest
+    mats.forEach((m, v) => {
+        const { bw, bh, group } = m.blocks;
+        for (let pass = 0; pass < P.matSmoothPasses; pass++) {
+            const next = new Int32Array(bw * bh).fill(-1);
+            for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+                const g = group[y * bw + x]; if (g < 0) continue;
+                const votes = new Map<number, number>();
+                for (let j = -P.matSmoothR; j <= P.matSmoothR; j++) for (let i = -P.matSmoothR; i <= P.matSmoothR; i++) { const xx = x + i, yy = y + j; if (xx < 0 || yy < 0 || xx >= bw || yy >= bh) continue; const gg = group[yy * bw + xx]; if (gg < 0) continue; const mi = gMat[v][gg]; if (mi >= 0) votes.set(mi, (votes.get(mi) ?? 0) + (i === 0 && j === 0 ? 1.5 : 1)); }
+                let best = -1, bv = 0; for (const [mi, c] of votes) if (c > bv) { bv = c; best = mi; }
+                next[y * bw + x] = best;
+            }
+            for (let b = 0; b < bw * bh; b++) if (group[b] >= 0 && next[b] >= 0) gMat[v][group[b]] = next[b];
+        }
+        for (let b = 0; b < bw * bh; b++) {
+            const g = group[b]; if (g < 0 || gMat[v][g] >= 0) continue;
+            const role = m.groups[g].role, cand = mats2.map((mm, i) => [mm, i] as const).filter(([mm]) => mm.role === role).sort((a, b2) => b2[0].n - a[0].n)[0];
+            gMat[v][g] = cand ? cand[1] : -1;
+        }
+    });
+    // number the materials that hold area, and colour them apart (golden-angle hues)
+    const used = new Set<number>(); gMat.forEach(a => a.forEach(i => { if (i >= 0) used.add(i); }));
+    const order = [...used].sort((a, b) => mats2[a].role.localeCompare(mats2[b].role) || mats2[b].n - mats2[a].n);
+    const entries: MaterialEntry[] = [], idOf = new Map<number, number>();
+    order.forEach((mi, k) => {
+        const mm = mats2[mi], id = k + 1, h = (k * 137.508) % 360, sat = 0.55, val = 0.92 - 0.25 * ((k >> 2) % 2);
+        const f = (n: number) => { const kk = (n + h / 60) % 6; return Math.round(255 * (val - val * sat * Math.max(0, Math.min(kk, 4 - kk, 1)))); };
+        const lit = Number.isFinite(mm.L);
+        const lin = lit ? labToLin(mm.L, mm.A, mm.B) : undefined;
+        idOf.set(mi, id);
+        entries.push({ id, role: mm.role, idColor: [f(5), f(3), f(1)], ...(lin ? { photoColor: [linearToSrgb8(lin[0]), linearToSrgb8(lin[1]), linearToSrgb8(lin[2])] as [number, number, number], lab: [Math.round(mm.L * 10) / 10, Math.round(mm.A * 10) / 10, Math.round(mm.B * 10) / 10] as [number, number, number] } : {}), areaM2: Math.round(mm.px * 10) / 10, groups: mm.groups, provenance: lit ? 'photo-inferred' : 'generated', reason: lit ? `the ${mm.role} elements whose photo colours fall within ${mm.role === 'wall' || mm.role === 'roof' ? P.matDeltaESurface : P.matDeltaE} of each other (CIELAB, lightness weighted ${P.matLightWeight}: one material lit differently), each element read as a whole` : `no photo reached these ${mm.role} elements: one material assumed for the role` });
+    });
+    return { entries, perView: gMat.map(a => Int32Array.from(a, i => (i >= 0 ? idOf.get(i) ?? 0 : 0))) };
+}
+
+/**
+ * The elevation set of a scan (a triangle soup in the frame its facades, walls and symmetry are read in): four
+ * elevations square to its walls (A to D) and the roof plan, constructed from what `inputs` gives, each with its
+ * material ID map in the same pixels (`material`: each drawn region one material's colour, the table in
+ * report.materials; `overlay`: the drawing's lines over it).
+ */
+export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string; material: Uint8Array; overlay: Uint8Array }> } {
     const t0 = Date.now();
     const m = weld(inputs.structure ?? positions);
     // the depth the elements and the outline are tested against: the structure with its openings closed, when given
@@ -490,11 +681,23 @@ export function renderBlueprints(positions: Float32Array | Float64Array, inputs:
     for (let i = 1; i < m.P.length; i += 3) if (m.P[i] < groundY) groundY = m.P[i];
     const labels: Record<string, string> = { north: 'ELEVATION A', east: 'ELEVATION B', south: 'ELEVATION C', west: 'ELEVATION D', plan: 'ROOF PLAN' };
     const views = CARDINAL_VIEWS.map(v => turned(v, azimuth));
-    const pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string }> = [], stats: BlueprintReport['views'] = [];
+    const sheets: Array<{ png: Sheet; mat: MatSheet }> = [], stats: BlueprintReport['views'] = [];
     for (const view of views) {
-        const { png, stats: s } = renderSheet(m, view, labels[view.name] ?? view.name.toUpperCase(), inputs, P, azimuth, groundY, depthMesh);
-        pngs.push({ name: view.name, width: png.W, height: png.H, rgb: png.rgb, svg: svgOf(png, SCHEMES[P.scheme].bg) });
-        stats.push(s);
+        const { png, stats: s, mat } = renderSheet(m, view, labels[view.name] ?? view.name.toUpperCase(), inputs, P, azimuth, groundY, depthMesh);
+        sheets.push({ png, mat }); stats.push(s);
     }
-    return { report: { version: BLUEPRINT_VERSION, params: P, wallAzimuthDeg: azimuth, views: stats, ms: Date.now() - t0 }, pngs };
+    const { entries, perView } = assignMaterials(sheets.map(s => s.mat), P);
+    const colorOf = new Map(entries.map(e => [e.id, e.idColor]));
+    const pngs = sheets.map(({ png, mat }, v) => {
+        const material = new Uint8Array(png.W * png.H * 3).fill(255), overlay = new Uint8Array(png.W * png.H * 3);
+        for (let y = 0; y < mat.dh; y++) for (let x = 0; x < mat.dw; x++) {
+            const g = mat.inst[y * mat.dw + x]; if (g < 0) continue;
+            const c = colorOf.get(perView[v][g]); if (!c) continue;
+            material.set(c, ((y + mat.M) * png.W + x + mat.M) * 3);
+        }
+        // the drawing over the map: each pixel the map's colour darkened by the drawing's ink
+        for (let i = 0; i < png.W * png.H; i++) { const k = (png.rgb[3 * i] + png.rgb[3 * i + 1] + png.rgb[3 * i + 2]) / 765; for (let c = 0; c < 3; c++) overlay[3 * i + c] = Math.round(material[3 * i + c] * k); }
+        return { name: views[v].name, width: png.W, height: png.H, rgb: png.rgb, svg: svgOf(png, SCHEMES[P.scheme].bg), material, overlay };
+    });
+    return { report: { version: BLUEPRINT_VERSION, params: P, wallAzimuthDeg: azimuth, views: stats, materials: entries, ms: Date.now() - t0 }, pngs };
 }

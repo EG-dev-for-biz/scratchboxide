@@ -180,9 +180,10 @@ function put(c: Canvas, x: number, y: number, a: number): void {
  * depth test (bilinear texels, perceptual lightness so shade does not hide an edge), its Sobel gradient, and the pixels
  * that pass the quantile and are a local maximum across the gradient. Returns the edge mask and its counts.
  */
-export function photoEdges(photo: TileTriangles, view: LineDrawingView, W: number, H: number, col: (u: number) => number, row: (v: number) => number, P: LineDrawingParams): { edge: Uint8Array; covered: number; edgePixels: number; threshold: number } {
+export function photoEdges(photo: TileTriangles, view: LineDrawingView, W: number, H: number, col: (u: number) => number, row: (v: number) => number, P: LineDrawingParams, /** When given (W x H x 3), each covered pixel's linear RGB is written here (NaN where the photo does not reach). */ rgbOut?: Float32Array): { edge: Uint8Array; covered: number; edgePixels: number; threshold: number } {
     const { forward, right, up } = view;
     const N = W * H, depth = new Float32Array(N).fill(Infinity), lum = new Float32Array(N).fill(NaN);
+    rgbOut?.fill(NaN);
     const nTri = photo.positions.length / 9, rgb = new Float64Array(3);
     const sample = (ti: number, u: number, v: number): number => {
         const k = photo.texture[ti];
@@ -213,6 +214,7 @@ export function photoEdges(photo: TileTriangles, view: LineDrawingView, W: numbe
             depth[i] = d;
             const uv = photo.uvs, q = 6 * t;
             lum[i] = sample(t, w0 * uv[q] + w1 * uv[q + 2] + w2 * uv[q + 4], w0 * uv[q + 1] + w1 * uv[q + 3] + w2 * uv[q + 5]);
+            if (rgbOut) { rgbOut[3 * i] = rgb[0]; rgbOut[3 * i + 1] = rgb[1]; rgbOut[3 * i + 2] = rgb[2]; }
         }
     }
     // Sobel, only where all eight neighbours are covered (a photo's edge against the background is the silhouette's job)
