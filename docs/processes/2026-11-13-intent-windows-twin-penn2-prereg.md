@@ -111,4 +111,28 @@ excluded by the tool. No earlier comparison judged these twins.
   render) 0.1 % at v0 and v1 and 3-5 % at v2 and v3. Both twins draw the station entrance and podium as the same coarse
   blocks, far from the raw scan. The likely outcome is "the judge cannot tell"; the call is still made once, as planned.
 
+- **Paid call:** `2_pennsylvania_plaza_new_york_ny_20261113T232155_7809`, the pinned poses, every arm and decoy, through
+  photo_match_evaluate's own code (a tsx driver, the app's environment; the tool unchanged), judge `gemini-4-argon`. One
+  call, the only one. 12 judge calls (2 views x 3 runs x 2) and 4 photo fetches: about $1.
+- **Views:** v2 (9m1AwCk2) and v3 (kHQwYm36) did not register against the tile mesh; v0 and v1 were judged.
+- **Records:** report and grids in `docs/screenshots/intent_twin_penn2_2026-11-13/` (gitignored).
+
 ## Report
+
+**Nothing is concluded: the judge cannot answer this question at Penn 2.**
+
+- **Era check (before the scores were used):** both judged photos (2026-04) show Penn 2 after its recladding: a
+  glass curtain wall and a new glass entrance canopy on raking columns. The tile, and so both twins and the raw scan,
+  show the dark building and the old station entrance from before it. The photo shows a different facade than the tile
+  in both views, so by the era rule both are dropped. The two views that failed to register are consistent with the
+  same cause. No judged view remains.
+- **Bars 1, 2, V1-V3:** not evaluated. The overall scores printed on the grids were seen while checking the era (A 4.0,
+  B 4.0, X2 3.0, X3 3.0, the raw scan 5.0-5.3 in both views); they are recorded here and decide nothing.
+- **What the free dry run already showed:** from street level the two arms differ in a few percent of pixels (clay:
+  under 5 %), and both draw the station entrance and podium as the same coarse blocks.
+
+**Decision (the question's "missed, or the judge cannot tell" outcome):** the intent stays a drawing and material-map
+tool; no adapter to the twin is written. MAIN's hold on Penn 2 views (2026-11-01) is confirmed and is wider than the
+station entrance: the whole facade differs between the tile and current Street View, so no photo-match comparison of
+this building's look can be made until the tiles are recaptured. A redo needs another building whose K reading is
+sparse and whose photos match its tile, under a new preregistration that names this one.
