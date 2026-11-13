@@ -206,6 +206,7 @@ import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
+import { appendBuildRow, buildRowFromFailure, buildRowFromResult } from './run-ledger';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { describeMirrorFill, describeMirrorWindows, describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, symmetryFillOn, symmetryOn, symmetryWindowsOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
@@ -1152,6 +1153,11 @@ const defaultFootprints = (place: { lat: number; lng: number }, radiusM: number)
 
 function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
+}
+
+/** The run record's path for a ledger row's proof, or undefined when the cache will not name one (a bad run id). */
+function runRecordPathOrUndefined(cache: StageCache, runId: string): string | undefined {
+    try { return cache.runRecordPath(runId); } catch { return undefined; }
 }
 
 function scanFitCode(err: unknown): string | undefined {
@@ -2320,6 +2326,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // the place's versions are in the object store before this run's are offered to it (as the finish below does)
             if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
             keepSceneObjects(run, cache, outcome, scan, request.query, { isolate: false });
+            // one durable row for this build, outside the stage cache (run-ledger.ts): what was chosen, measured and decided
+            appendBuildRow(buildRowFromResult({ runId, request, result: outcome.result, runRecord: runRecordPathOrUndefined(cache, runId), artifactId }));
             return outcome;
         }
 
@@ -7051,6 +7059,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
         if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
         keepSceneObjects(run, cache, outcome, extraction, request.query, { isolate: !!request.isolate, place: placeValue ? { name: placeValue.formattedAddress || request.query, lat: placeValue.lat, lng: placeValue.lng } : undefined });
+        // one durable row for this build, outside the stage cache (run-ledger.ts): what was chosen, measured and decided
+        appendBuildRow(buildRowFromResult({ runId, request, result: outcome.result, runRecord: runRecordPathOrUndefined(cache, runId), artifactId }));
         return outcome;
     } catch (err) {
         // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
@@ -7072,6 +7082,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         try { cache.writeRunNote(runId, 'main_thread', blockTracer.stop()); } catch { /* the note is diagnostics only */ }
         try { cache.writeRunNote(runId, 'model_calls', modelCalls.report()); } catch { /* the note is diagnostics only */ }
         try { if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report()); } catch { /* the note is diagnostics only */ }
+        // a build that failed or was stopped is evidence too, and the commonest kind: it gets its row like any other
+        appendBuildRow(buildRowFromFailure({
+            runId, request,
+            outcome: run.state.runState === 'stopped' ? 'stopped' : 'failed',
+            reason: errorMessage(err),
+            place: { query: run.state.place.query, resolvedAddress: run.state.place.resolvedAddress, lat: run.state.place.lat, lng: run.state.place.lng },
+            stages: run.state.stages, degradations: run.state.degradations, cache: run.cacheStatus,
+            runRecord: runRecordPathOrUndefined(cache, runId)
+        }));
         throw err;
     }
 }
