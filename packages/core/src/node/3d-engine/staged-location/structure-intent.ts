@@ -55,7 +55,9 @@
  *     backed by both channels, or twice the size where only one channel speaks); isolated ones are noise the pattern
  *     overrides (flagged). A bay column contradicted down most of the face is dropped as folded wrongly. The lattice
  *     replaces the bottom-up reading only when it explains latticeExplained of the windows read and overrides at most
- *     latticeMaxNoise of its sites; reads off the lattice stay as read.
+ *     latticeMaxNoise of its sites; reads off the lattice stay as read. Facades of one wall (pipeline K's wall grammar,
+ *     else overlapping on one plane) are fitted as one lattice from all their windows and share it (wallLattices), so
+ *     overlapping readings draw one grid; a facade whose own windows mostly disagree keeps its own.
  * 10. The plan's symmetry. Under a plan mirror or rotation scoring planScore or more, a poorly read face whose mapped
  *     partner coincides with it (normal, plane, extent) takes the partner's windows (its own reading and its own rules'
  *     inferences, never what other faces lent it). Tier and plan windows are vetted by the face's photo like any other.
@@ -80,6 +82,8 @@ export interface IntentFacadeInput {
     tier?: number;
     /** The straightened photo's column period over the whole face (pipeline K's rectify: periodM, periodNcc). */
     period?: { m: number; ncc: number };
+    /** The wall the facade belongs to (pipeline K's wall grammar: facades of one wall overlap or touch on one plane); absent: grouped by plane. */
+    wall?: number;
 }
 
 export type IntentSource = 'measured' | 'repeat' | 'mirror' | 'twin' | 'tier' | 'plan' | 'pattern';
@@ -117,7 +121,7 @@ export interface IntentFacade {
  */
 export interface FaceLattice {
     accepted: boolean; reason: string;
-    bayM: number; bayFrom: 'photo' | 'building'; offsetsM: number[]; /** Window columns of the bay dropped: the evidence contradicted them down the face. */ droppedColumns: number; windowM: [number, number]; rowPitchM: number;
+    bayM: number; bayFrom: 'photo' | 'building' | 'wall'; offsetsM: number[]; /** The rows' phase as a world height (a window row's centre). */ rowPhaseY?: number; /** The wall's facades when the lattice is the wall's, shared by all of them. */ wall?: number[]; /** Window columns of the bay dropped: the evidence contradicted them down the face. */ droppedColumns: number; windowM: [number, number]; rowPitchM: number;
     sites: number; yes: number; no: number; unknown: number; noiseOverridden: number; detailSites: number;
     details: Array<{ sites: number; rows: [number, number]; cols: [number, number]; twoSource: number }>;
     /** Share of the windows read (inside the lattice's extent) that sit on a lattice site. */
@@ -171,7 +175,9 @@ export const STRUCTURE_INTENT_PARAMS = {
     latticeNcc: 0.5, latticePeakShare: 0.2, recessMinM: 0.04, recessFlatShare: 0.15, detailMinSites: 4,
     latticeExplained: 0.6, latticeMaxNoise: 0.15, depthBandM: 1.5,
     /** A window column of the bay contradicted on columnNoShare of its sites down the face is dropped from the lattice (folded wrongly), not kept as a detail. */
-    columnNoShare: 0.6
+    columnNoShare: 0.6,
+    /** A facade takes its wall's lattice when at least wallMemberExplained of its own windows read (6 or more) sit on it. */
+    wallMemberExplained: 0.4
 };
 export type IntentParams = typeof STRUCTURE_INTENT_PARAMS;
 export const STRUCTURE_INTENT_VERSION = 'structure-intent/4';
@@ -573,7 +579,12 @@ export function inferStructureIntent(facades: IntentFacadeInput[], symmetry?: Sy
     const bays = facades.filter(f => f.period && f.period.ncc >= P.latticeNcc).map(f => ({ m: f.period!.m, w: f.period!.ncc * f.frame.width * f.frame.height * f.frame.pixel * f.frame.pixel }));
     let buildingBay: number | undefined, bw = 0;
     for (const b of bays) { const near = bays.filter(o => Math.abs(o.m - b.m) <= P.tierPitchTol * b.m), w = near.reduce((a, o) => a + o.w, 0); if (w > bw) { bw = w; buildingBay = near.reduce((a, o) => a + o.m * o.w, 0) / w; } }
-    intent.facades = intent.facades.map((I, k) => faceLattice(I, facades[k], readers.get(facades[k].facadeId), opts.scan, st, buildingBay, P));
+    const specs = wallLattices(facades, st, buildingBay, P);
+    intent.facades = intent.facades.map((I, k) => {
+        const fc = facades[k], spec = specs.get(fc.facadeId);
+        if (spec) { const w = faceLattice(structuredClone(I), fc, readers.get(fc.facadeId), opts.scan, st, buildingBay, P, spec); if (w.lattice?.accepted) return w; }
+        return faceLattice(I, fc, readers.get(fc.facadeId), opts.scan, st, buildingBay, P);
+    });
     const intentOf = new Map(intent.facades.map(f => [f.facadeId, f]));
     // across facades: accepted twins that agree on what both read share their windows
     for (const tw of symmetry?.twins ?? []) {
@@ -769,18 +780,22 @@ const ringOf = (r: number[]): number[] => { const w = r[2] - r[0], h = r[3] - r[
 const shrink = (r: number[], k: number): number[] => { const w = r[2] - r[0], h = r[3] - r[1]; return [r[0] + k * w, r[1] + k * h, r[2] - k * w, r[3] - k * h]; };
 
 /** The face read top-down as one lattice (see FaceLattice); returns the facade's intent, replaced by the lattice's where it stands. */
-function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceReader | undefined, scan: Float32Array | Float64Array | undefined, storey: { pitchM: number; datumY: number } | undefined, buildingBay: number | undefined, P: IntentParams): IntentFacade {
+/** A lattice fixed from outside the face (its wall's), in the face's own pixels. */
+interface LatticeSpec { bay: number; offs: number[]; rowPitchPx: number; rowPhase: number; w: number; h: number; wall: number[] }
+
+function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceReader | undefined, scan: Float32Array | Float64Array | undefined, storey: { pitchM: number; datumY: number } | undefined, buildingBay: number | undefined, P: IntentParams, spec?: LatticeSpec): IntentFacade {
     const f = fc.frame, px = f.pixel;
     const read = splitStrips(fc.rects, fc.panes, P);
-    if (read.length < 6) return I;
-    const wRead = med(read.map(r => r[2] - r[0])), hRead = med(read.map(r => r[3] - r[1]));
+    if (!spec && read.length < 6) return I;
+    const wRead = spec ? spec.w : med(read.map(r => r[2] - r[0])), hRead = spec ? spec.h : med(read.map(r => r[3] - r[1]));
     // the rows: the building's storey, else the face's own (its read rows' lattice)
     let rowPitchPx: number | undefined, rowPhase: number;
     const yc = read.map(r => (r[1] + r[3]) / 2);
-    if (storey) { rowPitchPx = storey.pitchM / px; }
+    if (spec) { rowPitchPx = spec.rowPitchPx; }
+    else if (storey) { rowPitchPx = storey.pitchM / px; }
     else { const rows = cluster1(yc, 0.35 * hRead).at, l = fitLattice(rows, P.latticeTol, P.minRepeat); if (l && l.share >= P.latticeShare) rowPitchPx = l.pitch; }
     if (!rowPitchPx) { I.lattice = { accepted: false, reason: 'no row pitch: no building storey and the face\'s rows do not repeat', bayM: 0, bayFrom: 'photo', offsetsM: [], droppedColumns: 0, windowM: [wRead * px, hRead * px], rowPitchM: 0, sites: 0, yes: 0, no: 0, unknown: 0, noiseOverridden: 0, detailSites: 0, details: [], explained: 0, depth: { learned: false } }; return I; }
-    rowPhase = circularPhase(yc, rowPitchPx);
+    rowPhase = spec ? spec.rowPhase : circularPhase(yc, rowPitchPx);
     // the depth channel: learned from the read windows (a recess against the wall around them)
     const D = scan ? faceDepth(scan, f, P.depthBandM) : undefined;
     let recess: number | undefined;
@@ -790,11 +805,17 @@ function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceRea
     }
     // the bay: the photo's period when it is clear, else the building's; whichever explains more of the windows read
     const cands: Array<{ m: number; from: 'photo' | 'building' }> = [];
-    if (fc.period && fc.period.ncc >= P.latticeNcc) cands.push({ m: fc.period.m, from: 'photo' });
-    if (buildingBay && !cands.some(c => Math.abs(c.m - buildingBay) <= P.tierPitchTol * c.m)) cands.push({ m: buildingBay, from: 'building' });
-    if (!cands.length) return I;
+    if (!spec && fc.period && fc.period.ncc >= P.latticeNcc) cands.push({ m: fc.period.m, from: 'photo' });
+    if (!spec && buildingBay && !cands.some(c => Math.abs(c.m - buildingBay) <= P.tierPitchTol * c.m)) cands.push({ m: buildingBay, from: 'building' });
+    if (!spec && !cands.length) return I;
     const xc = read.map(r => (r[0] + r[2]) / 2);
-    let bestL: { bay: number; from: 'photo' | 'building'; offs: number[]; explained: number } | undefined;
+    let bestL: { bay: number; from: 'photo' | 'building' | 'wall'; offs: number[]; explained: number } | undefined;
+    if (spec) {
+        // the wall's lattice: only how much of this face's own reading it explains is measured here (a face that read nothing defers to its wall)
+        const onCol = (x: number) => spec.offs.some(o => { const d = Math.abs((((x - o) % spec.bay) + spec.bay) % spec.bay); return Math.min(d, spec.bay - d) <= 0.35 * wRead; });
+        const onRow = (y: number) => { const d = Math.abs((((y - rowPhase) % rowPitchPx!) + rowPitchPx!) % rowPitchPx!); return Math.min(d, rowPitchPx! - d) <= 0.35 * hRead; };
+        bestL = { bay: spec.bay, from: 'wall', offs: spec.offs, explained: read.length ? read.filter((_, i) => onCol(xc[i]) && onRow(yc[i])).length / read.length : 1 };
+    }
     for (const c of cands) {
         const bay = c.m / px;
         if (bay < 1.2 * wRead) continue;
@@ -820,8 +841,9 @@ function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceRea
         const explained = read.filter((_, i) => onCol(xc[i]) && onRow(yc[i])).length / read.length;
         if (!bestL || explained > bestL.explained) bestL = { bay, from: c.from, offs: merged, explained };
     }
-    const base: FaceLattice = { accepted: false, reason: '', bayM: (bestL?.bay ?? 0) * px, bayFrom: bestL?.from ?? 'photo', offsetsM: (bestL?.offs ?? []).map(o => o * px), droppedColumns: 0, windowM: [wRead * px, hRead * px], rowPitchM: rowPitchPx * px, sites: 0, yes: 0, no: 0, unknown: 0, noiseOverridden: 0, detailSites: 0, details: [], explained: bestL?.explained ?? 0, depth: { learned: recess !== undefined, ...(recess !== undefined ? { recessM: recess } : {}) } };
-    if (!bestL || bestL.explained < P.latticeExplained) { I.lattice = { ...base, reason: `the lattice explains only ${Math.round((bestL?.explained ?? 0) * 100)}% of the windows read: the face is not one pattern` }; return I; }
+    const base: FaceLattice = { accepted: false, reason: '', bayM: (bestL?.bay ?? 0) * px, bayFrom: bestL?.from ?? 'photo', offsetsM: (bestL?.offs ?? []).map(o => o * px), rowPhaseY: rowToY(f, rowPhase), ...(spec ? { wall: spec.wall } : {}), droppedColumns: 0, windowM: [wRead * px, hRead * px], rowPitchM: rowPitchPx * px, sites: 0, yes: 0, no: 0, unknown: 0, noiseOverridden: 0, detailSites: 0, details: [], explained: bestL?.explained ?? 0, depth: { learned: recess !== undefined, ...(recess !== undefined ? { recessM: recess } : {}) } };
+    // a member of a wall is held to a lower bar (its windows were already counted in fitting the wall's lattice), but one whose own windows mostly disagree keeps its own design
+    if (!bestL || bestL.explained < (spec ? (read.length >= 6 ? P.wallMemberExplained : 0) : P.latticeExplained)) { I.lattice = { ...base, reason: `the lattice explains only ${Math.round((bestL?.explained ?? 0) * 100)}% of the windows read: the face is not one pattern` }; return I; }
     // every site of the lattice on the face's surface
     const { bay } = bestL;
     let offs = bestL.offs;
@@ -836,7 +858,7 @@ function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceRea
     for (let k = Math.ceil((hRead / 2 - rowPhase) / rowPitchPx); rowPhase + k * rowPitchPx + hRead / 2 <= f.height; k++) rowsY.push(rowPhase + k * rowPitchPx);
     let nC = colsX.length; const nR = rowsY.length;
     // the read extent bounds the face where there is no scan to say where its surface is
-    const yMin = Math.min(...read.map(r => r[1])) - rowPitchPx, yMax = Math.max(...read.map(r => r[3])) + rowPitchPx;
+    const yMin = read.length ? Math.min(...read.map(r => r[1])) - rowPitchPx : 0, yMax = read.length ? Math.max(...read.map(r => r[3])) + rowPitchPx : f.height;
     type Vote = -2 | -1 | 0 | 1 | 2; // -2 off the face; -1 no; 0 unknown; 1 yes; 2 read
     let vote = new Int8Array(nC * nR), twoNo = new Uint8Array(nC * nR);
     const siteRect = (c: number, r: number): Rect => [colsX[c] - wRead / 2, rowsY[r] - hRead / 2, colsX[c] + wRead / 2, rowsY[r] + hRead / 2];
@@ -885,7 +907,7 @@ function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceRea
     // it stands: the face's windows are the lattice's, every site on the face but the details; reads off the lattice stay as read (a detail the photo showed)
     // each window split as the read windows are (their panes side by side, the median)
     const sideBySide = (r: Rect) => (fc.panes ?? []).filter(p => p[3] - p[1] >= 0.6 * (r[3] - r[1]) && Math.max(0, Math.min(r[2], p[2]) - Math.max(r[0], p[0])) * Math.max(0, Math.min(r[3], p[3]) - Math.max(r[1], p[1])) >= 0.6 * Math.max(1e-9, (p[2] - p[0]) * (p[3] - p[1]))).length;
-    const fam = 0, pn = Math.min(P.maxPanes, Math.max(1, med(read.map(sideBySide))));
+    const fam = 0, pn = Math.min(P.maxPanes, Math.max(1, read.length ? med(read.map(sideBySide)) : 1));
     const windows: IntentWindow[] = [];
     for (let r = 0; r < nR; r++) for (let c = 0; c < nC; c++) {
         const i = r * nC + c; if (vote[i] === -2 || detail[i]) continue;
@@ -899,7 +921,7 @@ function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceRea
         windows,
         families: [{ id: 0, w: wRead, h: hRead, panes: pn }, { id: 1, w: med(offLattice.map(q => q[2] - q[0])) || wRead, h: med(offLattice.map(q => q[3] - q[1])) || hRead, panes: 1 }],
         regions: [
-            { y0: Math.min(...rowsY) - hRead / 2, y1: Math.max(...rowsY) + hRead / 2, decision: 'repeat', scores: { columns: bestL.explained, rows: 1, mirror: 0 }, pitchPx: [bay, rowPitchPx], readWindows: read.length, added: windows.filter(w => w.source === 'pattern').length, reason: `one lattice over the face: a ${(bay * px).toFixed(2)} m bay (${bestL.from === 'photo' ? "the photo's own period" : "the building's"}) holding ${offs.length} window column${offs.length > 1 ? 's' : ''}, rows ${(rowPitchPx * px).toFixed(2)} m apart; it explains ${Math.round(bestL.explained * 100)}% of the windows read; ${details.length} coherent details kept, ${noise} isolated contradictions overridden` },
+            { y0: Math.min(...rowsY) - hRead / 2, y1: Math.max(...rowsY) + hRead / 2, decision: 'repeat', scores: { columns: bestL.explained, rows: 1, mirror: 0 }, pitchPx: [bay, rowPitchPx], readWindows: read.length, added: windows.filter(w => w.source === 'pattern').length, reason: `one lattice over the face: a ${(bay * px).toFixed(2)} m bay (${bestL.from === 'photo' ? "the photo's own period" : bestL.from === 'wall' ? `its wall's, shared with facades ${spec!.wall.filter(x => x !== fc.facadeId).join(', ')}` : "the building's"}) holding ${offs.length} window column${offs.length > 1 ? 's' : ''}, rows ${(rowPitchPx * px).toFixed(2)} m apart; it explains ${Math.round(bestL.explained * 100)}% of the windows read; ${details.length} coherent details kept, ${noise} isolated contradictions overridden` },
             { y0: 0, y1: f.height, decision: 'neither', scores: { columns: 0, rows: 0, mirror: 0 }, readWindows: offLattice.length, added: 0, reason: `${offLattice.length} windows read off the lattice: kept as read (details the photo showed)` }
         ],
         structure: { piers: [], floors: rowsY.slice(1).map((y, k) => Math.round(((y + rowsY[k]) / 2) * 10) / 10) },
@@ -908,5 +930,77 @@ function faceLattice(I: IntentFacade, fc: IntentFacadeInput, reader: EvidenceRea
     // piers between each two adjacent window columns, over the lattice's rows on the face
     const rowsOn = rowsY.filter((_, r) => colsX.some((__, c) => vote[r * nC + c] !== -2));
     if (rowsOn.length) for (let c = 0; c + 1 < nC; c++) { const x0 = colsX[c] + wRead / 2, x1 = colsX[c + 1] - wRead / 2; if (x1 - x0 >= P.pierMinW * wRead) out.structure!.piers.push([x0, Math.min(...rowsOn) - hRead / 2, x1, Math.max(...rowsOn) + hRead / 2]); }
+    return out;
+}
+
+/**
+ * One lattice per wall: facades that overlap or touch on one plane (pipeline K's wall grammar, else grouped by plane) are
+ * one wall and one design. Their read windows are put together in one frame and the wall's lattice found from all of
+ * them (its bay from the members' photo periods, else the building's), then given back to each member in its own
+ * pixels, so overlapping readings draw the same grid instead of two slightly different ones side by side.
+ */
+function wallLattices(facades: IntentFacadeInput[], storey: { pitchM: number; datumY: number } | undefined, buildingBay: number | undefined, P: IntentParams): Map<number, LatticeSpec> {
+    const out = new Map<number, LatticeSpec>();
+    const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const sub = (a: ArrayLike<number>, b: ArrayLike<number>) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    // the walls: the grammar's, else facades on one plane whose extents overlap or touch
+    const groups = new Map<string, IntentFacadeInput[]>();
+    const parent = facades.map((_, i) => i), root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
+    const extent = (f: IntentFacadeInput) => ({ s0: f.frame.orthoSMin, s1: f.frame.orthoSMin + f.frame.width * f.frame.pixel, t0: f.frame.orthoTMax - f.frame.height * f.frame.pixel, t1: f.frame.orthoTMax });
+    for (let i = 0; i < facades.length; i++) for (let j = i + 1; j < facades.length; j++) {
+        const a = facades[i], b = facades[j];
+        if (a.wall !== undefined || b.wall !== undefined) { if (a.wall !== undefined && a.wall === b.wall) parent[root(j)] = root(i); continue; }
+        if (dot(a.frame.normal, b.frame.normal) < 0.98 || Math.abs(dot(sub(b.frame.centroid, a.frame.centroid), a.frame.normal)) > 0.5) continue;
+        // b's extent in a's frame
+        const ea = extent(a), off = sub(b.frame.centroid, a.frame.centroid), eb = extent(b), su = dot(b.frame.axisS, a.frame.axisS);
+        const bs = [dot(off, a.frame.axisS) + su * eb.s0, dot(off, a.frame.axisS) + su * eb.s1].sort((x, y) => x - y), bt = [dot(off, a.frame.axisT) + eb.t0, dot(off, a.frame.axisT) + eb.t1];
+        if (bs[0] > ea.s1 + 1 || bs[1] < ea.s0 - 1 || bt[0] > ea.t1 || bt[1] < ea.t0) continue;
+        parent[root(j)] = root(i);
+    }
+    facades.forEach((f, i) => { const k = String(root(i)); (groups.get(k) ?? groups.set(k, []).get(k)!).push(f); });
+    for (const members of groups.values()) {
+        if (members.length < 2) continue;
+        const reads = members.map(m => ({ m, r: splitStrips(m.rects, m.panes, P) }));
+        if (reads.reduce((a, x) => a + x.r.length, 0) < 6) continue;
+        // the reference: the member with the most windows read; every member's windows in its frame, the frame grown to hold them all
+        const ref = reads.reduce((a, b) => (b.r.length > a.r.length ? b : a)).m, F = ref.frame;
+        const toRef = (m: IntentFacadeInput, x: number, y: number): [number, number] => {
+            const g = m.frame, s0 = g.orthoSMin + x * g.pixel, t0 = g.orthoTMax - y * g.pixel;
+            const p = [g.centroid[0] + s0 * g.axisS[0] + t0 * g.axisT[0], g.centroid[1] + s0 * g.axisS[1] + t0 * g.axisT[1], g.centroid[2] + s0 * g.axisS[2] + t0 * g.axisT[2]];
+            const v = sub(p, F.centroid);
+            return [(dot(v, F.axisS) - F.orthoSMin) / F.pixel, (F.orthoTMax - dot(v, F.axisT)) / F.pixel];
+        };
+        const all: Rect[] = [];
+        let minX = 0, minY = 0, maxX = F.width, maxY = F.height;
+        for (const m of members) {
+            const g = m.frame;
+            for (const [x, y] of [[0, 0], [g.width, 0], [0, g.height], [g.width, g.height]]) { const q = toRef(m, x, y); minX = Math.min(minX, q[0]); maxX = Math.max(maxX, q[0]); minY = Math.min(minY, q[1]); maxY = Math.max(maxY, q[1]); }
+        }
+        for (const { m, r } of reads) for (const q of r) { const a = toRef(m, q[0], q[1]), b = toRef(m, q[2], q[3]); all.push([Math.min(a[0], b[0]) - minX, Math.min(a[1], b[1]) - minY, Math.max(a[0], b[0]) - minX, Math.max(a[1], b[1]) - minY]); }
+        // one window per site: overlapping readings of one window count once
+        const uniq: Rect[] = [];
+        for (const q of all.sort((a, b) => a[0] - b[0])) if (!uniq.some(o => rectIoU(o, q) > 0.3)) uniq.push(q);
+        const virt: IntentFacadeInput = { facadeId: -1, frame: { ...F, orthoSMin: F.orthoSMin + minX * F.pixel, orthoTMax: F.orthoTMax - minY * F.pixel, width: Math.ceil(maxX - minX), height: Math.ceil(maxY - minY) }, rects: uniq };
+        // every member's photo period is a candidate for the wall's bay (and the building's, inside faceLattice): the one that explains most of the wall's windows stands
+        const periods = [...new Map(members.filter(m => m.period && m.period.ncc >= P.latticeNcc).map(m => [Math.round(m.period!.m * 20), m.period!])).values()];
+        let joint: FaceLattice | undefined;
+        for (const pd of periods.length ? periods : [undefined]) {
+            const blank: IntentFacade = { facadeId: -1, regions: [], windows: [], families: [], twinsFrom: [] };
+            const l = faceLattice(blank, { ...virt, ...(pd ? { period: pd } : {}) }, undefined, undefined, storey, buildingBay, P).lattice;
+            if (l?.accepted && (!joint || l.explained > joint.explained)) joint = l;
+        }
+        if (!joint?.accepted || joint.rowPhaseY === undefined) continue;
+        // the wall's lattice in world terms, then in each member's pixels (the members share the plane, so the map is affine along it)
+        const V = virt.frame, bayV = joint.bayM / V.pixel, offsV = joint.offsetsM.map(o => o / V.pixel);
+        for (const m of members) {
+            const g = m.frame, B = (V.pixel * dot(V.axisS, g.axisS)) / g.pixel, A = (dot(sub([V.centroid[0] + V.orthoSMin * V.axisS[0], V.centroid[1] + V.orthoSMin * V.axisS[1], V.centroid[2] + V.orthoSMin * V.axisS[2]], g.centroid), g.axisS) - g.orthoSMin) / g.pixel;
+            const bay = Math.abs(B) * bayV, rowPitchPx = joint.rowPitchM / g.pixel;
+            out.set(m.facadeId, {
+                bay, offs: offsV.map(o => ((((A + B * o) % bay) + bay) % bay)), rowPitchPx,
+                rowPhase: ((yToRow(g, joint.rowPhaseY) % rowPitchPx) + rowPitchPx) % rowPitchPx,
+                w: (joint.windowM[0] / g.pixel), h: (joint.windowM[1] / g.pixel), wall: members.map(x => x.facadeId)
+            });
+        }
+    }
     return out;
 }

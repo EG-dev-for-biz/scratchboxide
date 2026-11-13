@@ -37,6 +37,10 @@ per face, and the burden of proof is on the exception, not on the pattern:
 - **A detail must be coherent:** a run of contradicted sites over two rows or three columns, aligned to the grid,
   backed by more than one source (or twice the size where only one speaks). Isolated contradictions are capture noise
   (glare, a smear, a misread) and the pattern overrides them, flagged.
+- **One wall, one lattice:** facades that overlap or touch on one plane are one wall; fit its lattice from all their
+  windows together and give it to each, so overlapping readings draw one grid instead of two side by side. A facade
+  whose own windows mostly disagree with its wall's lattice keeps its own design; a wall no single lattice explains
+  is several designs.
 - **Choose the simplest description that explains the evidence:** the lattice stands only when it explains most of
   the windows read and overrides little; an irregular face (a crown, a one-off) falls back to the readings below.
 

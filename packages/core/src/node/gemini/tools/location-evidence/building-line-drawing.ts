@@ -187,8 +187,9 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
     // the design intent: each facade's regions decided (repeating, symmetric or neither), what the capture missed inferred from the repeat, the mirror or a twin facade, every repeating band on the building's storey
     // each facade's setback tier, as pipeline K's wall grammar grouped its walls
     const tierOf = new Map<number, number>();
-    for (const w of (k?.walls ?? []) as Array<BlueprintWall & { facades?: number[]; tier?: number }>) if (w.tier !== undefined) for (const f of w.facades ?? []) tierOf.set(f, w.tier);
-    const intent = k?.facades.length ? inferStructureIntent(k.facades.map(f => ({ facadeId: f.facadeId, frame: f.frame, rects: f.rects, panes: f.panes, ...(tierOf.has(f.facadeId) ? { tier: tierOf.get(f.facadeId) } : {}), ...periodOf(f.frame), ...evidenceOf(k.dir, f.frame) })), inputs.symmetry, undefined, { scan: depthScan(glb) ?? soup }) : undefined;
+    const wallOf = new Map<number, number>();
+    for (const w of (k?.walls ?? []) as Array<BlueprintWall & { facades?: number[]; tier?: number }>) { if (w.tier !== undefined) for (const f of w.facades ?? []) tierOf.set(f, w.tier); for (const f of w.facades ?? []) wallOf.set(f, w.wallId); }
+    const intent = k?.facades.length ? inferStructureIntent(k.facades.map(f => ({ facadeId: f.facadeId, frame: f.frame, rects: f.rects, panes: f.panes, ...(tierOf.has(f.facadeId) ? { tier: tierOf.get(f.facadeId) } : {}), ...(wallOf.has(f.facadeId) ? { wall: wallOf.get(f.facadeId) } : {}), ...periodOf(f.frame), ...evidenceOf(k.dir, f.frame) })), inputs.symmetry, undefined, { scan: depthScan(glb) ?? soup }) : undefined;
     if (intent) inputs.intent = intent;
     if (req.runId) {
         const root = roots.find(r => fs.existsSync(path.join(r, STAGED_CACHE, 'runs', req.runId!, 'stages.json')));

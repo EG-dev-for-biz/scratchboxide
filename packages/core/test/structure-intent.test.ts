@@ -196,5 +196,23 @@ describe('structure intent: what the design is, decided region by region', () =>
         expect(f.lattice?.accepted ?? false).toBe(false);
         expect(f.windows.every(w => w.source !== 'pattern')).toBe(true);
     });
+
+    it('gives overlapping readings of one wall one shared lattice, so they draw the same grid', () => {
+        // two facades of one wall (x 0..40 m and 10..50 m, facing +z): each read the shared windows a little off, in its own frame
+        const xsW = Array.from({ length: 12 }, (_, k) => 2 + 4 * k), ysW = [50, 100, 150, 200, 250];
+        const mk = (id: number, x0: number, jitter: number): IntentFacadeInput => ({
+            facadeId: id, wall: 7, period: { m: 4, ncc: 0.8 },
+            frame: { ...frame(id), centroid: [x0 + 20, 15, 0] },
+            rects: xsW.flatMap(x => ysW.map(y => { const px = (x - x0) * 10; return [px - 8 + jitter, y - 10, px + 8 + jitter, y + 10] as Rect; })).filter(r => r[0] >= 0 && r[2] <= 400)
+        });
+        const it = inferStructureIntent([mk(1, 0, 0), mk(2, 10, 3)]);
+        const worldCols = (k: number, x0: number) => [...new Set(it.facades[k].windows.filter(w => w.source !== 'measured' || true).map(w => Math.round(((w.rect[0] + w.rect[2]) / 2 / 10 + x0) * 10) / 10))].sort((a, b) => a - b);
+        expect(it.facades[0].lattice?.bayFrom).toBe('wall');
+        expect(it.facades[1].lattice?.bayFrom).toBe('wall');
+        const a = worldCols(0, 0), b = worldCols(1, 10);
+        // where the two overlap (x 10..40 m) their columns are the same world positions
+        const overlap = (v: number[]) => v.filter(x => x > 11 && x < 39);
+        expect(overlap(a)).toEqual(overlap(b));
+    });
 });
 
