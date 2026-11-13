@@ -27,6 +27,8 @@ import { glbSoup } from '../../../3d-engine/staged-location/facade-lattice';
 import { LINE_DRAWING_PARAMS, renderBuildingLineDrawings, type LineDrawingParams } from '../../../3d-engine/staged-location/building-line-drawing';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
+import { renderBlueprints, type BlueprintFacade, type BlueprintInputs } from '../../../3d-engine/staged-location/building-blueprint';
+import { detectSymmetry } from '../../../3d-engine/staged-location/pipeline-k/symmetry';
 import { stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 
 export const BUILDING_LINE_DRAWING_TOOL_NAME = 'location_building_line_drawing';
@@ -55,7 +57,23 @@ export function scanOfRun(roots: string[], runId: string): string {
     throw new BuildingLineDrawingError('not_found', `staged run ${runId} names no cut-out scan (tile_refine/<key>/clay.glb) on this machine`);
 }
 
-export interface BuildingLineDrawingRequest { runId?: string; glbPath?: string; texturedGlbPath?: string; photo?: boolean; pixelM?: number; creaseDeg?: number; minEdgeLenM?: number; outputDir?: string }
+export interface BuildingLineDrawingRequest { runId?: string; glbPath?: string; texturedGlbPath?: string; photo?: boolean; pixelM?: number; creaseDeg?: number; minEdgeLenM?: number; outputDir?: string; /** 'blueprint' (default): the architect's sheets with the windows and symmetry; 'lines': the scan's lines and the photo's edges. */ style?: 'blueprint' | 'lines' }
+
+/**
+ * Pipeline K's reading of the cut-out beside a scan (its rectified orthos: tile_refine's relief_orthos_k_*, the newest
+ * with window_fit.json): each facade's frame and windows. Undefined when K never read this cut-out.
+ */
+export function kReadingBeside(clayGlb: string): { dir: string; facades: BlueprintFacade[] } | undefined {
+    const root = path.dirname(clayGlb);
+    const dirs = fs.readdirSync(root).filter(d => /^relief_orthos_k_[0-9a-f]+$/.test(d) && fs.existsSync(path.join(root, d, 'window_fit.json')) && fs.existsSync(path.join(root, d, 'facades.json')))
+        .map(d => path.join(root, d)).sort((a, b) => fs.statSync(path.join(b, 'window_fit.json')).mtimeMs - fs.statSync(path.join(a, 'window_fit.json')).mtimeMs);
+    if (!dirs.length) return undefined;
+    const frames = (JSON.parse(fs.readFileSync(path.join(dirs[0], 'facades.json'), 'utf8')) as { facades: Array<BlueprintFacade['frame'] & { facadeId: number }> }).facades;
+    const fit = (JSON.parse(fs.readFileSync(path.join(dirs[0], 'window_fit.json'), 'utf8')) as { facades: Array<{ facadeId: number; rects?: Array<[number, number, number, number]> }> }).facades;
+    const facades: BlueprintFacade[] = [];
+    for (const e of fit) { const frame = frames.find(f => f.facadeId === e.facadeId); if (frame && e.rects?.length) facades.push({ facadeId: e.facadeId, frame, rects: e.rects }); }
+    return { dir: dirs[0], facades };
+}
 
 export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, workspaceRoot: string, stagedRoot = stagedWorkspaceRoot()): Promise<{ summary: string; payload: Record<string, unknown> }> {
     const roots = [...new Set([stagedRoot, workspaceRoot].filter(Boolean))];
@@ -75,13 +93,14 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
         ...(req.creaseDeg !== undefined && req.creaseDeg > 0 && req.creaseDeg < 180 ? { creaseDeg: req.creaseDeg } : {}),
         ...(req.minEdgeLenM !== undefined && req.minEdgeLenM >= 0 ? { minEdgeLenM: req.minEdgeLenM } : {})
     };
+    const name = req.runId ?? path.basename(glb, '.glb');
+    const outDir = req.outputDir ? within(req.outputDir) : path.join(stagedRoot, STAGED_CACHE, 'line_drawing', name);
+    const wsDir = path.join(workspaceRoot || stagedRoot, 'renders', 'line-drawing', name);
+    if ((req.style ?? 'blueprint') === 'blueprint') return blueprintOf(req, glb, soup, outDir, wsDir, roots);
     // the photo's edges: the textured scan beside the cut-out (tile_refine's textured.glb), or the one given
     const texturedPath = req.photo === false ? undefined : req.texturedGlbPath ? within(req.texturedGlbPath) : path.join(path.dirname(glb), 'textured.glb');
     const photo = texturedPath && fs.existsSync(texturedPath) ? readTileTriangles(fs.readFileSync(texturedPath)) : undefined;
     const { report, pngs } = renderBuildingLineDrawings(soup, undefined, P, photo);
-    const name = req.runId ?? path.basename(glb, '.glb');
-    const outDir = req.outputDir ? within(req.outputDir) : path.join(stagedRoot, STAGED_CACHE, 'line_drawing', name);
-    const wsDir = path.join(workspaceRoot || stagedRoot, 'renders', 'line-drawing', name);
     fs.mkdirSync(outDir, { recursive: true });
     fs.mkdirSync(wsDir, { recursive: true });
     const files: Array<{ view: string; path: string; workspacePath: string }> = [];
@@ -100,9 +119,46 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
     };
 }
 
+/** The blueprint sheets: K's windows beside the cut-out, its symmetry read natively there, the run's request as the title. */
+async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: Float32Array, outDir: string, wsDir: string, roots: string[]): Promise<{ summary: string; payload: Record<string, unknown> }> {
+    const k = kReadingBeside(glb);
+    let lowest = Infinity;
+    for (let i = 1; i < soup.length; i += 3) if (soup[i] < lowest) lowest = soup[i];
+    const inputs: BlueprintInputs = { ...(k ? { facades: k.facades } : {}), note: req.runId ? `run ${req.runId}` : path.basename(glb) };
+    let symmetryNote = 'no symmetry read (pipeline K wrote no facade photos beside the cut-out)';
+    if (k) {
+        try { inputs.symmetry = await detectSymmetry({ scanGlb: glb, groundY: lowest, footprint: [], orthosDir: k.dir }); symmetryNote = `symmetry read from the scan and the facade photos (${inputs.symmetry.facades.filter(f => f.detected && !f.periodic).length} facades mirror-symmetric)`; }
+        catch (err) { symmetryNote = `the symmetry reading failed: ${err instanceof Error ? err.message : String(err)}`; }
+    }
+    if (req.runId) {
+        const root = roots.find(r => fs.existsSync(path.join(r, STAGED_CACHE, 'runs', req.runId!, 'stages.json')));
+        try { const st = JSON.parse(fs.readFileSync(path.join(root!, STAGED_CACHE, 'runs', req.runId, 'stages.json'), 'utf8')) as { request?: { query?: string } }; if (st.request?.query) inputs.title = st.request.query; } catch { /* untitled */ }
+    }
+    const { report, pngs } = renderBlueprints(soup, inputs);
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.mkdirSync(wsDir, { recursive: true });
+    const files: Array<{ view: string; label: string; path: string; workspacePath: string }> = [];
+    for (const p of pngs) {
+        const v = report.views.find(x => x.name === p.name)!, base = `blueprint_${v.label.toLowerCase().replace(/\s+/g, '_')}.png`;
+        const file = path.join(outDir, base), ws = path.join(wsDir, base);
+        fs.writeFileSync(file, encodePng(p.width, p.height, p.rgb, 3));
+        if (ws !== file) fs.copyFileSync(file, ws);
+        files.push({ view: p.name, label: v.label, path: file, workspacePath: ws });
+    }
+    const json = path.join(outDir, 'blueprint.json');
+    fs.writeFileSync(json, JSON.stringify({ source: glb, ...(k ? { windowsFrom: k.dir } : {}), ...report }, null, 1));
+    const per = report.views.map(v => `${v.label.toLowerCase()} (${v.extentM[0]} x ${v.extentM[1]} m${v.windows ? `, ${v.windows} windows${v.mirroredWindows ? ` and ${v.mirroredWindows} mirrored` : ''}` : ''}${v.levels.length ? `, ${v.levels.length} levels` : ''}${v.planAxes ? `, ${v.planAxes} centre line${v.planAxes > 1 ? 's' : ''}` : ''})`).join('; ');
+    return {
+        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: blueprint sheets of the scan, four elevations square to its walls (${report.wallAzimuthDeg} degrees) and the roof plan: ${per}. The outline and levels are measured; the windows are ${k ? 'pipeline K\'s facade reader and window arrays (photo-inferred)' : 'not drawn (no pipeline K reading of this cut-out)'}; ${symmetryNote}; dashed windows are mirrors of windows about their facade\'s axis (generated). Files in ${wsDir}.`,
+        payload: { source: glb, ...(k ? { windowsFrom: k.dir } : {}), reportJson: json, files, report }
+    };
+}
+
 export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
     name: BUILDING_LINE_DRAWING_TOOL_NAME,
-    description: 'Draw a staged building\'s scan as line drawings, the way elevations and a plan draw a building: its silhouette edges (black), crease edges (dark grey: corners, setbacks, cornices, pier sides, where two surfaces meet at creaseDeg or more) and open edges (light grey: the scan\'s own holes and cuts), with hidden lines removed, ' +
+    description: 'Draw a staged building as an architect\'s blueprint (the default): white line work on blueprint blue, four elevations square to its walls and the roof plan, each with a grid, its levels (the heights its setbacks and parapets run at), overall dimensions, a scale bar and a title block. ' +
+        'The outline is the scan\'s own (measured); the windows are pipeline K\'s reading of the facades (the facade reader and the window arrays: photo-inferred), each a crisp rectangle; each facade\'s mirror axis and the building\'s plan mirrors are read from the scan and the photos and drawn as centre lines, and a window mirrored about its facade\'s axis into an empty site is drawn dashed (generated). ' +
+        'style "lines" instead draws the scan as plain line drawings: its silhouette edges (black), crease edges (dark grey: corners, setbacks, cornices, pier sides, where two surfaces meet at creaseDeg or more) and open edges (light grey: the scan\'s own holes and cuts), with hidden lines removed, ' +
         'from four sides square to the building\'s own walls (their dominant direction measured from the scan) and from above (the roof plan, which shows the terraces and setbacks). A geometric guide to what the scan measures on every surface. Geometry only, no model call: every line is a measured edge of the scan. ' +
         'With the textured scan (found beside the run\'s cut-out, or texturedGlbPath) the facade detail the geometry is too coarse to hold (windows, bands, spandrels, mullions) is added from the photo: its strongest edges, mid grey, labelled photo-inferred (an edge in the photo may also be a shadow or a smear); the geometry\'s lines stay measured. ' +
         'Writes one PNG per view and line_drawing.json (each view\'s frame, so a pixel maps back to the scan, and the edges found and drawn by kind) and copies the PNGs into the workspace under renders/line-drawing/. ' +
@@ -113,7 +169,8 @@ export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
             runId: { type: 'STRING', description: 'A staged-location run id (8 hex digits); its cut-out scan (tile_refine clay.glb) is drawn. Default: the staged build open in the viewport.' },
             glbPath: { type: 'STRING', description: 'Instead of a run: a GLB (path or /models/... URL) whose triangles carry no node transforms.' },
             texturedGlbPath: { type: 'STRING', description: 'The textured scan whose photo edges add the facade detail (default: textured.glb beside the cut-out).' },
-            photo: { type: 'BOOLEAN', description: 'false: draw the geometry only, no photo edges (default true when a textured scan is found).' },
+            photo: { type: 'BOOLEAN', description: 'With style "lines": false draws the geometry only, no photo edges (default true when a textured scan is found).' },
+            style: { type: 'STRING', description: '"blueprint" (default): the architect\'s sheets with windows, levels, dimensions and symmetry. "lines": the scan\'s lines and the photo\'s edges.' },
             pixelM: { type: 'NUMBER', description: 'Metres per pixel (default 0.1); coarsened so no view passes 4096 px on its long side.' },
             creaseDeg: { type: 'NUMBER', description: 'Two surfaces meeting at this angle or more draw a crease line (default 25).' },
             minEdgeLenM: { type: 'NUMBER', description: 'Edges shorter than this (metres) are mesh noise and not drawn (default 0.3).' },
@@ -129,7 +186,7 @@ export const buildingLineDrawingHandler: ToolHandler = async (args, ctx): Promis
         const active = ctx.request?.activeArtifact?.type === '3d-scene' ? (ctx.request.activeArtifact.data as { stagedBuild?: { runId?: string } } | undefined)?.stagedBuild : undefined;
         const runId = str(args.runId) ?? (!str(args.glbPath) ? active?.runId : undefined);
         const pixelM = num(args.pixelM), creaseDeg = num(args.creaseDeg), minEdgeLenM = num(args.minEdgeLenM), outputDir = str(args.outputDir), glbPath = str(args.glbPath), texturedGlbPath = str(args.texturedGlbPath);
-        const r = await runBuildingLineDrawing({ ...(runId ? { runId } : {}), ...(glbPath ? { glbPath } : {}), ...(pixelM !== undefined ? { pixelM } : {}), ...(creaseDeg !== undefined ? { creaseDeg } : {}), ...(minEdgeLenM !== undefined ? { minEdgeLenM } : {}), ...(outputDir ? { outputDir } : {}), ...(texturedGlbPath ? { texturedGlbPath } : {}), ...(args.photo === false ? { photo: false } : {}) }, ctx.workspaceRoot);
+        const r = await runBuildingLineDrawing({ ...(runId ? { runId } : {}), ...(glbPath ? { glbPath } : {}), ...(pixelM !== undefined ? { pixelM } : {}), ...(creaseDeg !== undefined ? { creaseDeg } : {}), ...(minEdgeLenM !== undefined ? { minEdgeLenM } : {}), ...(outputDir ? { outputDir } : {}), ...(texturedGlbPath ? { texturedGlbPath } : {}), ...(args.photo === false ? { photo: false } : {}), ...(args.style === 'lines' || args.style === 'blueprint' ? { style: args.style } : {}) }, ctx.workspaceRoot);
         return { status: 'completed', summaryResult: r.summary, resultPayload: { status: 'success', ...r.payload } };
     } catch (err) {
         const code = err instanceof BuildingLineDrawingError ? err.code : 'draw_failed';

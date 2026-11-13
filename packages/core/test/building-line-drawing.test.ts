@@ -13,6 +13,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { renderBuildingLineDrawings, renderPlaneLines, CARDINAL_VIEWS, LINE_DRAWING_PARAMS } from '../src/node/3d-engine/staged-location/building-line-drawing';
 import { runBuildingLineDrawing } from '../src/node/gemini/tools/location-evidence/building-line-drawing';
+import { renderBlueprints } from '../src/node/3d-engine/staged-location/building-blueprint';
 
 /** A closed axis-aligned box as a triangle soup, its faces wound outward. */
 function box(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): number[] {
@@ -22,6 +23,31 @@ function box(x0: number, y0: number, z0: number, x1: number, y1: number, z1: num
     for (const [a, b, cc, d] of quads) out.push(...c[a], ...c[b], ...c[cc], ...c[a], ...c[cc], ...c[d]);
     return out;
 }
+
+describe('building blueprint: windows on their facades, mirrored about its axis', () => {
+    it('draws a facade\'s windows on the elevation that faces it and mirrors an unpaired one about the facade\'s axis', () => {
+        // a 20 m wide, 10 m deep, 12 m tall box; its +z face as a facade ortho at 0.1 m (s along +x, t up), two windows
+        // paired about the face's middle and one on the left with no partner
+        const soup = Float32Array.from(box(0, 0, 0, 20, 12, 10));
+        const frame = { centroid: [10, 6, 10] as [number, number, number], normal: [0, 0, 1] as [number, number, number], axisS: [1, 0, 0] as [number, number, number], axisT: [0, 1, 0] as [number, number, number], orthoSMin: -10, orthoTMax: 6, pixel: 0.1, width: 200, height: 120 };
+        const rects: Array<[number, number, number, number]> = [[30, 20, 50, 50], [150, 20, 170, 50], [30, 70, 50, 100]];
+        const symmetry = { schema: 'scratchbox.symmetry/1', frame: '', plan: { cellM: 1, grid: [1, 1], origin: [0, 0], massing: { mass: 0, centroid: [10, 5], best: { angleDeg: 0, point: [10, 5], dir: [0, 1], score: 0.95, share: 1 }, mirrors: [], detectedMirrors: 1, rotation: { order: 1, score: 0, scores: [] } }, tiers: [] },
+            facades: [{ facadeId: 1, read: true, detected: true, periodic: false, axisS: 0, ncc: 0.9 }], transforms: [], twins: [], ms: { plan: 0, facades: 0, twins: 0 } } as never;
+        const { report } = renderBlueprints(soup, { facades: [{ facadeId: 1, frame, rects }], symmetry, title: 'Test box' });
+        // the views turn to the box's walls (0 degrees): the elevation looking at the +z face is the one looking along -z
+        const front = report.views.find(v => v.forward[2] < -0.99)!;
+        expect(front.windows).toBe(3);
+        // the unpaired window's mirror (at s = +6..+8 m) is drawn dashed; the paired ones need none
+        expect(front.mirroredWindows).toBe(1);
+        expect(front.facadeAxes).toBe(1);
+        // the plan mirror along z is seen edge on from the front: a centre line
+        expect(front.planAxes).toBe(1);
+        // the other elevations do not face the facade: no windows on them
+        for (const v of report.views.filter(x => x !== front)) expect(v.windows).toBe(0);
+        // the top edge runs the full width: a level at 12 m
+        expect(front.levels.some(l => Math.abs(l - 12) < 0.6)).toBe(true);
+    });
+});
 
 describe('building line drawing: silhouette and crease, hidden lines removed', () => {
     it('draws a box\'s outline seen face on and hides a box standing behind it', () => {
@@ -98,7 +124,7 @@ const ESB_CLAY = path.resolve(__dirname, '../../../.scratchbox/cache/tile_refine
 describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan (ESB)', () => {
     it('draws the Empire State Building\'s scan from four sides and above, every line measured', async () => {
         const work = fs.mkdtempSync(path.join(os.tmpdir(), 'line-drawing-'));
-        const r = await runBuildingLineDrawing({ glbPath: ESB_CLAY, outputDir: path.join(work, 'out') }, work, work);
+        const r = await runBuildingLineDrawing({ glbPath: ESB_CLAY, outputDir: path.join(work, 'out'), style: 'lines' }, work, work);
         const rep = r.payload.report as { triangles: number; views: Array<{ name: string; width: number; height: number; silhouette: { drawn: number }; crease: { drawn: number } }> };
         expect(rep.triangles).toBeGreaterThan(40_000);
         // Manhattan's grid: the ESB's walls stand about 29 degrees off the scene's axes (or 61, the same grid a quarter on)
@@ -124,5 +150,26 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         expect(sp.edgePixels).toBeGreaterThan(10_000);
         expect(sp.edgePixels).toBeLessThan(sp.covered * 0.15);
         expect(fs.existsSync(path.join(work, 'out', 'line_drawing.json'))).toBe(true);
+    }, 300_000);
+
+    it('draws the ESB as blueprint sheets: K\'s windows on its facades, its levels and its centre lines', async () => {
+        const work = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-'));
+        const r = await runBuildingLineDrawing({ glbPath: ESB_CLAY, outputDir: path.join(work, 'out') }, work, work);
+        const rep = r.payload.report as { views: Array<{ label: string; windows: number; mirroredWindows: number; levels: number[]; planAxes: number; extentM: [number, number] }> };
+        expect(rep.views.map(v => v.label)).toEqual(['ELEVATION A', 'ELEVATION B', 'ELEVATION C', 'ELEVATION D', 'ROOF PLAN']);
+        // pipeline K's windows beside the cut-out, on the elevations that face them
+        expect(r.payload.windowsFrom).toMatch(/relief_orthos_k_/);
+        const a = rep.views[0], c = rep.views[2], plan = rep.views[4];
+        expect(a.windows).toBeGreaterThan(1000);
+        expect(c.windows).toBeGreaterThan(1000);
+        // the setback over the podium (about 107 m) and the top of the shaft's crown (about 334 m) are among its levels
+        expect(c.levels.some(l => Math.abs(l - 107) < 3)).toBe(true);
+        expect(c.levels.some(l => Math.abs(l - 334) < 3)).toBe(true);
+        // the building's plan mirror is drawn on every elevation and both its axes across the plan
+        for (const v of rep.views.slice(0, 4)) expect(v.planAxes).toBeGreaterThanOrEqual(1);
+        expect(plan.planAxes).toBe(2);
+        expect(Math.round(a.extentM[1])).toBe(441);
+        const files = r.payload.files as Array<{ path: string }>;
+        for (const f of files) expect([...fs.readFileSync(f.path).subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
     }, 300_000);
 });

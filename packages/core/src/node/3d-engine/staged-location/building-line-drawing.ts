@@ -96,12 +96,12 @@ export const LINE_DRAWING_VERSION = 'building-line-drawing/3';
 // --- geometry -----------------------------------------------------------------------------------------------------
 
 /** A triangle faces the view only when its normal points back at it by more than this (an edge-on face, seen exactly side on, is not front-facing: rounding would otherwise draw its far edge over its near one). */
-const FACING_EPS = 1e-3;
+export const FACING_EPS = 1e-3;
 
-interface Mesh { P: Float64Array; tris: Int32Array; normal: Float64Array; triCount: number }
+export interface Mesh { P: Float64Array; tris: Int32Array; normal: Float64Array; triCount: number }
 
 /** Welds a triangle soup (9 floats per triangle) by position (1 mm grid); drops degenerate triangles. */
-function weld(positions: Float32Array | Float64Array, gridM = 0.001): Mesh {
+export function weld(positions: Float32Array | Float64Array, gridM = 0.001): Mesh {
     const key = (x: number, y: number, z: number) => `${Math.round(x / gridM)},${Math.round(y / gridM)},${Math.round(z / gridM)}`;
     const id = new Map<string, number>();
     const px: number[] = [], py: number[] = [], pz: number[] = [];
@@ -131,10 +131,10 @@ function weld(positions: Float32Array | Float64Array, gridM = 0.001): Mesh {
     return { P, tris: Int32Array.from(tris), normal: Float64Array.from(normal), triCount: tris.length / 3 };
 }
 
-interface EdgeClass { a: number; b: number; kind: 'silhouette' | 'crease' | 'boundary' }
+export interface EdgeClass { a: number; b: number; kind: 'silhouette' | 'crease' | 'boundary' }
 
 /** Every edge of `m` facing `forward` (dot(normal, forward) < 0) that is a silhouette, crease or front-facing boundary, at least minEdgeLenM long. */
-function classifyEdges(m: Mesh, forward: Vec3, creaseCos: number, minEdgeLenM: number): EdgeClass[] {
+export function classifyEdges(m: Mesh, forward: Vec3, creaseCos: number, minEdgeLenM: number): EdgeClass[] {
     const faces = new Map<number, number[]>(); // edge key -> triangle indices (usually 1-2; more at a weld seam)
     const key = (a: number, b: number) => (a < b ? a * 0x100000 + b : b * 0x100000 + a);
     for (let t = 0; t < m.triCount; t++) {
@@ -353,7 +353,7 @@ export function wallAzimuthDeg(m: { normal: Float64Array; P: Float64Array; tris:
 }
 
 /** A view turned by deg about the vertical (its forward, right and up all turned). */
-function turned(v: LineDrawingView, deg: number): LineDrawingView {
+export function turned(v: LineDrawingView, deg: number): LineDrawingView {
     const r = (deg * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
     const rot = (p: Vec3): Vec3 => [p[0] * c - p[2] * s, p[1], p[0] * s + p[2] * c];
     return { name: v.name, forward: rot(v.forward), right: rot(v.right), up: rot(v.up) };
