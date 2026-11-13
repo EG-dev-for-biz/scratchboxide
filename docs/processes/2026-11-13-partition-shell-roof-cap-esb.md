@@ -1,7 +1,7 @@
 # Process: The partition shell's roof cap on a live ESB build (pipeline K)
 
 > **Recorded:** 2026-11-13
-> **Status:** Needs Fix
+> **Status:** Verified (roof cap); Needs Fix (run-to-run lattice variation, upstream)
 > **Tags:** `operate-scratchbox` `pipeline-k` `partition-shell` `shell-fit` `roof-cap` `esb`
 > **Target Domain:** Real-world 3D locations (pipeline K, partition shell experiment)
 
@@ -26,8 +26,8 @@
 
 ## 3. What Broke / Didn't Work
 
-* **A 40 m slot at one setback column** — at (3, 25) the solid tops at 270.5 m with the cap on, against 318.5 m with it off (the scan reaches about 310 m there). Offline with ray votes the cap kept 318.5 m at the same column; it is the cap together with the winding-number labels (`windingLabels`, which `partition_shell.cpp` turns on). Suspected cause: that column has no up-facing scan at its real top, so `capCellsAtRoof` cuts at the highest roof found in its footprint, a terrace near 270 m. Not yet fixed.
-* **The assembled output is less clean** — after the facades are inset and the seams stitched: non-manifold edges 1,469 → 2,308, open edges 13,001 → 16,941. Not investigated: the cap's extra level cuts make more shell faces for the inset to meet.
+* **The setback "slot" at (3, 25) is not the roof cap** (first read as a 40 m slot the cap cut). Rerunning the solver offline on each build's own input (`SCRATCHBOX_K_PARTITION_SHELL_KEEP` keeps it; the solver is deterministic, one thread or six): with build f550d704's input that column tops at 270.5 m with the cap off and on; with build 1959a465's input, 318.5 m off and on. The two live builds' facade lattices differ (135,458 against 92,210 cells, 50,410 against 29,892 photo-recess cells) although their cleaned scans are byte-identical and the window reader was reused: run-to-run variation upstream of the partition shell (window fit and window arrays differ slightly between the runs). Not investigated further here. A wall-raised second cut was tried at three thresholds; it changed nothing at that column and was reverted.
+* **Why the assembled output's edges rise with the cap:** per output kind on the same input, off → on: partition shell open edges 15,795 → 13,331 (non-manifold 2 → 1); inset facades 16,017 → 13,562 (27,697 → 27,515); residual scan 7,013 → 8,152 (487 → 885); seam skirts 9,813 → 11,275 (609 → 860). Residual scan above 380 m grows from 887 to 3,035 triangles, 97% within 3 m of the antenna's axis, and the skirts there from 1,032 to 2,834; below 330 m both shrink. The antenna is kept as measured scan instead of buried in a solid column, and its own open borders and skirts are the extra edges; on build 1959a465's input the same holds (+1,020 open, +466 non-manifold). Sheet: `docs/screenshots/like_for_like.png`.
 * **UI** — "New Chat (⌘K)" did not open a new chat (the composer stayed on an existing session), so the builds were started through the tool route instead; the first call was refused until the worktree was added to `SCRATCHBOX_WORKSPACE_ROOTS`.
 
 ---

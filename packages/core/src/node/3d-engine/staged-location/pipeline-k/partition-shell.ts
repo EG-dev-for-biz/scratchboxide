@@ -243,6 +243,8 @@ export function buildPartitionShell(cleanedTex: Uint8Array, latticeTex: Uint8Arr
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'partition-shell-'));
     const inFile = path.join(dir, 'in.bin'), outFile = path.join(dir, 'out.bin'), repFile = path.join(dir, 'report.json');
     fs.writeFileSync(inFile, Buffer.concat(parts));
+    // SCRATCHBOX_K_PARTITION_SHELL_KEEP=<dir>: the native input kept there (in.bin), so the solver can be rerun on it alone
+    if (process.env.SCRATCHBOX_K_PARTITION_SHELL_KEEP) { fs.mkdirSync(process.env.SCRATCHBOX_K_PARTITION_SHELL_KEEP, { recursive: true }); fs.copyFileSync(inFile, path.join(process.env.SCRATCHBOX_K_PARTITION_SHELL_KEEP, 'in.bin')); }
     const tn = Date.now();
     const run = spawnSync(binarySync(), ['--input', inFile, '--output', outFile, '--report', repFile, '--set', 'residualTolM', String(P.residualTolM), '--set', 'threads', String(opts.threads ?? Math.max(1, os.cpus().length)), ...partitionShellSettings().flatMap(([k, v]) => ['--set', k, String(v)])], { encoding: 'utf8', maxBuffer: 64 << 20, timeout: 1_800_000 });
     const msNative = Date.now() - tn;
