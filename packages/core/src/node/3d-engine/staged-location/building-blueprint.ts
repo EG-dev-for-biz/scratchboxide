@@ -78,6 +78,8 @@ export const BLUEPRINT_PARAMS = {
     facingDeg: 70,
     /** An element is drawn when it stands at most this far behind the surface the viewer sees there. */
     windowDepthM: 1.5,
+    /** A window overlapping one already drawn by windowDupShare of the smaller is the same window read twice; a bay edge within baySnapM of the windows it holds is drawn on their edge. */
+    windowDupShare: 0.1, baySnapM: 0.4, coverGrow: 0.35,
     /** A facade's mirror axis is drawn (and its windows mirrored) when its photo matches its mirror at this NCC or more. */
     mirrorNcc: 0.75,
     planMirrorScore: 0.9, planMirrorDeg: 5,
@@ -348,6 +350,10 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     };
     const claim = (kind: string, b: number[]) => { const grid = claims.get(kind) ?? claims.set(kind, new Map()).get(kind)!; for (let gy = Math.floor(b[1] / CELL); gy <= Math.floor(b[3] / CELL); gy++) for (let gx = Math.floor(b[0] / CELL); gx <= Math.floor(b[2] / CELL); gx++) { const k = gy * 100000 + gx; (grid.get(k) ?? grid.set(k, []).get(k)!).push(b); } };
     let duplicatesSkipped = 0;
+    // the area each facade's drawn windows cover (each window grown by coverGrow of its size each way): another facade's window centred there is a conflicting second grid (a centre within 0.85 of a window of one drawn), while a neighbouring column a pier away stands
+    const cover = new Map<number, Array<[number, number, number, number, number]>>();
+    const coverBox = (b: number[], id: number) => { const w = (b[2] - b[0]) * P.coverGrow, h = (b[3] - b[1]) * P.coverGrow, e: [number, number, number, number, number] = [b[0] - w, b[1] - h, b[2] + w, b[3] + h, id]; for (let gy = Math.floor(e[1] / CELL); gy <= Math.floor(e[3] / CELL); gy++) for (let gx = Math.floor(e[0] / CELL); gx <= Math.floor(e[2] / CELL); gx++) { const k = gy * 100000 + gx; (cover.get(k) ?? cover.set(k, []).get(k)!).push(e); } };
+    const coveredByOther = (x: number, y: number, id: number) => (cover.get(Math.floor(y / CELL) * 100000 + Math.floor(x / CELL)) ?? []).some(e => e[4] !== id && x >= e[0] && x <= e[2] && y >= e[1] && y <= e[3]);
 
     const cosFacing = Math.cos((P.facingDeg * Math.PI) / 180);
     // 0a. the facade regions, nearest facade first: each band spans its facade's width, from halfway to the band above to halfway to the band below
@@ -381,6 +387,8 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     }
     // 1. structure: each facing wall's recessed bays, a panel with its reveal (the piers stand between them)
     let walls = 0, bays = 0;
+    // the bays' lines wait for the windows: a bay edge that runs just beside the windows it holds is the same line (snapped to them), else it would read doubled
+    const pendingBays: Array<{ bb: number[]; reveal: Vec3[] }> = [];
     if (!isPlan) for (const w of inputs.walls ?? []) {
         if (-dot(w.normal, forward) < cosFacing) continue;
         const at = (uu: number, y: number): Vec3 => [w.normal[0] * w.offset + w.axisU[0] * uu, y, w.normal[2] * w.offset + w.axisU[2] * uu];
@@ -391,9 +399,8 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             if (taken('bay', bb, 0.5)) { duplicatesSkipped++; continue; }
             claim('bay', bb);
             fillQuad(bq, groupOf('bay', `wall${w.wallId}`));
-            quad(bq, TONE.structure, medium);
             const r = Math.min(P.revealM, (b.u1 - b.u0) / 4);
-            quad([at(b.u0 + r, b.y0), at(b.u1 - r, b.y0), at(b.u1 - r, b.y1 - r), at(b.u0 + r, b.y1 - r)], TONE.fine, 0);
+            pendingBays.push({ bb, reveal: [at(b.u0 + r, b.y0), at(b.u1 - r, b.y0), at(b.u1 - r, b.y1 - r), at(b.u0 + r, b.y1 - r)] });
             bays++; any = true;
         }
         if (any) walls++;
@@ -402,8 +409,9 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     // 2. openings: each facing facade's windows with their frames, mullions (its panes), sills and the spandrels between
     let facadesDrawn = 0, windows = 0, panes = 0, sills = 0, spandrels = 0, mirrored = 0, facadeAxes = 0;
     const readingOf = (id: number) => inputs.symmetry?.facades.find(f => f.facadeId === id);
-    // nearest the viewer first, then the most windows: the reading that is seen is the one drawn
-    const ordered = [...(inputs.facades ?? [])].sort((a, b) => dot(a.frame.centroid, forward) - dot(b.frame.centroid, forward) || b.rects.length - a.rects.length);
+    // the fullest reading first (where two readings conflict, the one with more windows claims the area), then the nearest; the depth test already hides what stands behind
+    const windowsOf = (fc: BlueprintFacade) => inputs.intent?.facades.find(x => x.facadeId === fc.facadeId)?.windows.length ?? fc.rects.length;
+    const ordered = [...(inputs.facades ?? [])].sort((a, b) => windowsOf(b) - windowsOf(a) || dot(a.frame.centroid, forward) - dot(b.frame.centroid, forward));
     if (!isPlan) for (const fc of ordered) {
         const f = fc.frame;
         if (-dot(f.normal, forward) < cosFacing) continue;
@@ -425,8 +433,12 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             const g = visibleRect(r);
             if (!g) continue;
             const wb = boxOf(g.q);
-            if (taken('window', wb, 0.3)) { duplicatesSkipped++; continue; }
-            claim('window', wb); mine.push(wb);
+            // real neighbouring windows never overlap: any overlap of windowDupShare is the same window read twice
+            if (taken('window', wb, P.windowDupShare)) { duplicatesSkipped++; continue; }
+            // a second reading's grid interleaved with one already drawn: its window's centre inside the area another facade's windows cover
+            const cx = (wb[0] + wb[2]) / 2, cy = (wb[1] + wb[3]) / 2;
+            if (coveredByOther(cx, cy, fc.facadeId)) { duplicatesSkipped++; continue; }
+            claim('window', wb); mine.push(wb); coverBox(wb, fc.facadeId);
             const fr = frameS(g);
             fillQuad(g.q, groupOf('frame', `${fc.facadeId}.${it.family}`));
             fillQuad([world(g.s0 + fr, g.t0 + fr), world(g.s1 - fr, g.t0 + fr), world(g.s1 - fr, g.t1 - fr), world(g.s0 + fr, g.t1 - fr)], groupOf('glass', `${fc.facadeId}.${it.family}`));
@@ -491,6 +503,27 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             if (seen(world(a, (tBot + tTop) / 2))) { seg(world(a, tBot), world(a, tTop), 0.55, 0, [14, 4, 3, 4]); facadeAxes++; }
         }
         if (any) facadesDrawn++;
+    }
+
+    // 2b. the bays' lines: each edge within baySnapM of the windows inside the bay is drawn on the windows' edge; the reveal only where the windows leave the bay mostly open
+    const snapPx = P.baySnapM / pixelM, winGrid = claims.get('window');
+    for (const { bb, reveal } of pendingBays) {
+        const inside: number[][] = [];
+        if (winGrid) for (let gy = Math.floor(bb[1] / CELL); gy <= Math.floor(bb[3] / CELL); gy++) for (let gx = Math.floor(bb[0] / CELL); gx <= Math.floor(bb[2] / CELL); gx++) for (const o of winGrid.get(gy * 100000 + gx) ?? []) {
+            if (inside.includes(o)) continue;
+            const ix = Math.max(0, Math.min(bb[2], o[2]) - Math.max(bb[0], o[0])), iy = Math.max(0, Math.min(bb[3], o[3]) - Math.max(bb[1], o[1]));
+            if (ix * iy >= 0.5 * Math.max(1, (o[2] - o[0]) * (o[3] - o[1]))) inside.push(o);
+        }
+        const e = [...bb];
+        let covered = 0;
+        if (inside.length) {
+            const wx0 = Math.min(...inside.map(o => o[0])), wy0 = Math.min(...inside.map(o => o[1])), wx1 = Math.max(...inside.map(o => o[2])), wy1 = Math.max(...inside.map(o => o[3]));
+            if (Math.abs(e[0] - wx0) <= snapPx) e[0] = wx0; if (Math.abs(e[2] - wx1) <= snapPx) e[2] = wx1;
+            if (Math.abs(e[1] - wy0) <= snapPx) e[1] = wy0; if (Math.abs(e[3] - wy1) <= snapPx) e[3] = wy1;
+            covered = inside.reduce((a, o) => a + (o[2] - o[0]) * (o[3] - o[1]), 0) / Math.max(1, (bb[2] - bb[0]) * (bb[3] - bb[1]));
+        }
+        for (const [x0, y0, x1, y1] of [[e[0], e[1], e[2], e[1]], [e[2], e[1], e[2], e[3]], [e[2], e[3], e[0], e[3]], [e[0], e[3], e[0], e[1]]]) line(sheet, x0, y0, x1, y1, TONE.structure, medium);
+        if (covered < 0.5) quad(reveal, TONE.fine, 0);
     }
 
     // 3. the outline: silhouettes heaviest, creases medium, along the view's axes; long horizontal runs doubled as ledges
