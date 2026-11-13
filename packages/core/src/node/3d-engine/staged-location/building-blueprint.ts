@@ -74,8 +74,8 @@ export const BLUEPRINT_PARAMS = {
     axisDeg: 3,
     /** An outline line is not drawn where another already runs within this many pixels beside it (a silhouette, drawn with a wider brush, within 2 more): flutes, ribs and louvres closer than the drawing can show read as the surface, not as lines. Silhouettes are drawn first. */
     creaseCrowdPx: 2,
-    /** A facade or wall faces a view when its normal is within this angle (degrees) of the view's back direction. */
-    facingDeg: 25,
+    /** A facade or wall faces a view when its normal is within this angle (degrees) of the view's back direction: an oblique face (a wedge plan's long sides) is drawn foreshortened, as an elevation shows it; a face nearer edge-on is left to the view square to it. */
+    facingDeg: 70,
     /** An element is drawn when it stands at most this far behind the surface the viewer sees there. */
     windowDepthM: 1.5,
     /** A facade's mirror axis is drawn (and its windows mirrored) when its photo matches its mirror at this NCC or more. */
@@ -114,6 +114,8 @@ export interface BlueprintReport {
         mirroredWindows: number; facadeAxes: number; planAxes: number; levels: number[]; extentM: [number, number];
         /** Windows drawn by provenance (with an intent). */
         bySource?: Partial<Record<IntentSource, number>>;
+        /** Piers drawn from the intent's frame. */
+        piers?: number;
     }>;
     /** The material ID map's materials, one table for every view (the same ID is the same material in each). */
     materials?: MaterialEntry[];
@@ -321,8 +323,25 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     const claim = (kind: string, b: number[]) => { const grid = claims.get(kind) ?? claims.set(kind, new Map()).get(kind)!; for (let gy = Math.floor(b[1] / CELL); gy <= Math.floor(b[3] / CELL); gy++) for (let gx = Math.floor(b[0] / CELL); gx <= Math.floor(b[2] / CELL); gx++) { const k = gy * 100000 + gx; (grid.get(k) ?? grid.set(k, []).get(k)!).push(b); } };
     let duplicatesSkipped = 0;
 
-    // 1. structure: each facing wall's recessed bays, a panel with its reveal (the piers stand between them)
     const cosFacing = Math.cos((P.facingDeg * Math.PI) / 180);
+    // 0b. the frame the intent inferred: each pier between two window columns, its two edges one continuous line down the shaft (structure); drawn first so the measured bays and the windows paint over it in the ID map
+    let piers = 0;
+    if (!isPlan && inputs.intent) for (const fc of [...(inputs.facades ?? [])].sort((a, b) => dot(a.frame.centroid, forward) - dot(b.frame.centroid, forward))) {
+        const f = fc.frame, fi = inputs.intent.facades.find(x => x.facadeId === fc.facadeId);
+        if (!fi?.structure?.piers.length || -dot(f.normal, forward) < cosFacing) continue;
+        const world = (x: number, y: number): Vec3 => { const s0 = f.orthoSMin + x * f.pixel, t0 = f.orthoTMax - y * f.pixel; return [f.centroid[0] + s0 * f.axisS[0] + t0 * f.axisT[0], f.centroid[1] + s0 * f.axisS[1] + t0 * f.axisT[1], f.centroid[2] + s0 * f.axisS[2] + t0 * f.axisT[2]]; };
+        for (const pr of fi.structure.piers) {
+            const q = [world(pr[0], pr[3]), world(pr[2], pr[3]), world(pr[2], pr[1]), world(pr[0], pr[1])];
+            if (!seen(world((pr[0] + pr[2]) / 2, (pr[1] + pr[3]) / 2))) continue;
+            const pb = boxOf(q);
+            if (taken('pier', pb, 0.5)) continue;
+            claim('pier', pb);
+            fillQuad(q, groupOf('pier', `${fc.facadeId}`));
+            seg(q[0], q[3], TONE.structure, medium); seg(q[1], q[2], TONE.structure, medium);
+            piers++;
+        }
+    }
+    // 1. structure: each facing wall's recessed bays, a panel with its reveal (the piers stand between them)
     let walls = 0, bays = 0;
     if (!isPlan) for (const w of inputs.walls ?? []) {
         if (-dot(w.normal, forward) < cosFacing) continue;
@@ -541,7 +560,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     const rows = [
         `${(inputs.title ?? 'BUILDING').toUpperCase()}  -  ${label}`,
         `1 PX = ${pixelM.toFixed(3)} M. VIEWS SQUARE TO THE WALLS (${azimuth.toFixed(1)} DEG). LEVELS IN METRES ABOVE THE LOWEST POINT.${inputs.note ? ` ${inputs.note.toUpperCase()}` : ''}`,
-        'HEAVY: SILHOUETTE. FULL TONE: CREASES, LEDGES (DOUBLED) AND RECESSED BAYS. LIGHTER: WINDOWS AND SILLS. LIGHTEST: REVEALS, MULLIONS, SPANDREL PANELS.',
+        'HEAVY: SILHOUETTE. FULL TONE: CREASES, LEDGES (DOUBLED), RECESSED BAYS AND PIERS. LIGHTER: WINDOWS AND SILLS. LIGHTEST: REVEALS, MULLIONS, SPANDREL PANELS.',
         'OUTLINE AND LEVELS MEASURED FROM THE SCAN. BAYS, WINDOWS, PANES AND SPANDRELS INFERRED FROM THE FACADE PHOTOS, AND THE FAINT HAIRLINES TRACED FROM THEM (PHOTO-INFERRED). ' + (inputs.intent ? 'WINDOWS DRAWN FROM THE DESIGN INTENT: EACH REGION REPEATING, SYMMETRIC OR NEITHER, WHAT THE PHOTOS MISSED INFERRED FROM THE REPEAT, THE MIRROR OR A TWIN FACADE (SEE STRUCTURE_INTENT.JSON). DASH-DOT: AXIS OF SYMMETRY.' : 'DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY.')
     ];
     const small = Math.max(1, ts - 1), chars = Math.floor((tbW - 20) / (6 * small));
@@ -565,7 +584,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     return {
         mat: { inst, dw, dh, M, pixelM, groups, blocks: { bw, bh, px: bpx, group: blockGroup } },
         png: sheet,
-        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, duplicatesSkipped, photoEdgePixels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10], ...(inputs.intent ? { bySource } : {}) }
+        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, duplicatesSkipped, photoEdgePixels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10], ...(inputs.intent ? { bySource, piers } : {}) }
     };
 }
 

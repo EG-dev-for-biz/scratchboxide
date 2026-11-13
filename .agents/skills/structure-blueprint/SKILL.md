@@ -36,6 +36,24 @@ region too). For each region decide, and record the scores that decided it:
 | **symmetric** | most openings mirror onto an opening about the face's own axis (the symmetry reading's, when it is a mirror and not just repetition) or the region's centre | each pair averaged; an unpaired opening gains its mirror |
 | **neither** | no pitch holds and nothing mirrors | nothing: the openings stand as read. A one-off entrance, an irregular crown, an object with no order is a valid answer, never something to force a grid onto |
 
+Before anything is laid in an empty site, ask the photo (pipeline K's facade photo with its uncovered, occluded and
+featureless masks) what it says there:
+- **window**: it shows an opening (the site contrasts with the wall around it the way the read windows do);
+- **wall**: it reached the site, saw it plainly, and it reads as the wall around it. **Closed**: nothing is laid;
+- **occluded** or **unread**: something stood in front, or the photo never reached it or smeared it. **Open**.
+
+Absence of evidence is not evidence of absence: only a site read as wall stops the design. Without the photo, nothing
+is carried past what was read.
+
+Then carry the design as far as the structure goes:
+- **To the wall's ends**: a repeat runs on past its last read column while the photo does not read the column as
+  wall, to a window's width from the face's edge. A builder runs the grid to the corner, not to where the camera
+  stopped.
+- **Through gaps**: two repeating bands with one lattice (pitch, phase, window size) are one shaft; the rows between
+  them are laid at the shaft's row pitch (or the building's storey).
+- **The frame**: piers between the columns (one piece down a shaft, through its spandrels) and floor lines between the
+  rows are inferred with the windows: the structure the openings sit in.
+
 Then across the whole structure:
 - **Twin faces**: two faces the symmetry reading accepted as one transformed into the other (a plan mirror or
   rotation) share their openings only where they agree on what both read; otherwise they are two designs.
@@ -49,7 +67,8 @@ Then across the whole structure:
 Call `location_building_line_drawing` (style `blueprint`, the default). It runs the reasoning above
 (`structure-intent.ts`) and writes, per view:
 - the elevation sheet (PNG and SVG): outline from the measured twin's shell when there is one, else the scan;
-  recessed bays, windows with frames, mullions, sills and spandrels from the intent; levels, dimensions, centre lines;
+  recessed bays, piers, windows with frames, mullions, sills and spandrels from the intent; levels, dimensions, centre
+  lines; oblique faces (a wedge plan's sides) foreshortened;
 - `material_<view>.png`: every drawn region one material ID. Each element (a window family's glass and frames, a
   wall's bays, a facade's spandrels, the bare wall in blocks) is read from the photo as a whole, merged by colour with
   shade read as one material lit differently, and the bare surface takes its neighbourhood's majority, so a stain or a
@@ -61,7 +80,9 @@ Call `location_building_line_drawing` (style `blueprint`, the default). It runs 
 
 ## 4. Report it honestly
 
-- Say how many regions were decided each way and why, how many openings were inferred and from what, and the storey.
+- Say how many regions were decided each way and why, how many openings were inferred and from what (repeat, mirror,
+  twin; and whether the photo showed a window there or could not tell), how many sites were withheld as wall, and the
+  storey.
 - Inferred content is labelled as inferred (repeat, mirror, twin; generated where nothing was read). Never call it
   measured.
 - Look at the sheets before saying they are good: a region filled with a grid the photo does not show, a mirror that

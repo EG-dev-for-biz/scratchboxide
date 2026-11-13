@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { buildingStorey, fitLattice, inferStructureIntent, mirrorShare, splitStrips, STRUCTURE_INTENT_PARAMS, type IntentFacadeInput } from '../src/node/3d-engine/staged-location/structure-intent';
+import { buildingStorey, fitLattice, inferStructureIntent, mirrorShare, splitStrips, STRUCTURE_INTENT_PARAMS, type FacadeEvidence, type IntentFacadeInput } from '../src/node/3d-engine/staged-location/structure-intent';
 
 type Rect = [number, number, number, number];
 // a facade 400 x 300 px at 0.1 m a pixel, facing +z, its photo's top at t = 15 m (world y = 15 at row 0)
@@ -82,4 +82,57 @@ describe('structure intent: what the design is, decided region by region', () =>
         const rowsOf = (k: number) => [...new Set(a.facades[k].windows.map(w => Math.round((w.rect[1] + w.rect[3]) / 2)))].sort((x, y) => x - y);
         expect(rowsOf(0)).toEqual(rowsOf(1));
     });
+
+    // a facade photo: wall at luma 0.6, a dark window (0.2) at each of `sites`; `uncovered` columns the photo never reached
+    const photo = (sites: Rect[], uncovered: [number, number][] = []): FacadeEvidence => {
+        const W = 400, H = 300, luma = new Float32Array(W * H).fill(0.6), valid = new Uint8Array(W * H).fill(1);
+        for (const r of sites) for (let y = Math.round(r[1]); y < Math.round(r[3]); y++) for (let x = Math.round(r[0]); x < Math.round(r[2]); x++) luma[y * W + x] = 0.2;
+        for (const [x0, x1] of uncovered) for (let y = 0; y < H; y++) for (let x = x0; x < x1; x++) valid[y * W + x] = 0;
+        return { W, H, luma, valid };
+    };
+
+    it('carries a repeat on to the wall\'s ends where the photo shows windows or never looked, and stops where it reads wall', () => {
+        const rows = [50, 100, 150, 200];
+        // the photo shows windows in columns 60..300; column 340 is plain wall; columns 20-80 the photo never reached
+        const shown = grid([60, 100, 140, 180, 220, 260, 300], rows);
+        const read = grid([140, 180, 220, 260], rows);
+        const f = inferStructureIntent([{ facadeId: 1, frame: frame(), rects: read, evidence: photo(shown, [[40, 80]]) }]).facades[0];
+        expect(f.evidence?.used).toBe(true);
+        const colsOut = [...new Set(f.windows.map(w => Math.round((w.rect[0] + w.rect[2]) / 2)))].sort((a, b) => a - b);
+        // carried left to 100 (shown) and 60 (never reached: unread), right to 300 (shown); 340 reads as wall: not laid
+        expect(colsOut).toEqual([60, 100, 140, 180, 220, 260, 300]);
+        expect(f.evidence?.extended).toBe(3);
+        expect(f.windows.filter(w => Math.round((w.rect[0] + w.rect[2]) / 2) === 60).every(w => w.evidence === 'unread')).toBe(true);
+        expect(f.windows.filter(w => Math.round((w.rect[0] + w.rect[2]) / 2) === 100).every(w => w.evidence === 'window')).toBe(true);
+    });
+
+    it('withholds a repeat site the photo reads as wall, and fills one it never reached', () => {
+        const all = grid([60, 100, 140, 180, 220], [50, 100, 150, 200]);
+        // two sites the capture missed: (140, 100) the photo shows as plain wall; (180, 150) it never reached
+        const read = all.filter(r => !((r[0] + 8 === 140 && r[1] + 10 === 100) || (r[0] + 8 === 180 && r[1] + 10 === 150)));
+        const shown = all.filter(r => !(r[0] + 8 === 140 && r[1] + 10 === 100));
+        const f = inferStructureIntent([{ facadeId: 1, frame: frame(), rects: read, evidence: photo(shown, [[170, 190]]) }]).facades[0];
+        expect(f.regions[0].decision).toBe('repeat');
+        expect(f.regions[0].withheld).toBe(1);
+        expect(f.windows.some(w => Math.abs(w.rect[0] + 8 - 140) < 1 && Math.abs(w.rect[1] + 10 - 100) < 1)).toBe(false);
+        const filled = f.windows.find(w => Math.abs(w.rect[0] + 8 - 180) < 1 && Math.abs(w.rect[1] + 10 - 150) < 1)!;
+        expect(filled.source).toBe('repeat');
+        expect(filled.evidence).toBe('unread');
+    });
+
+    it('lays a shaft through a gap between two matching bands, and draws its piers once down the whole shaft', () => {
+        const cols = [60, 100, 140, 180, 220];
+        const upper = grid(cols, [20, 70, 120]), lower = grid(cols, [270, 320]);
+        // a band of a different pattern between them (two small windows off the columns), on rows 170 and 220 the capture missed the shaft
+        const odd: Rect[] = [[300, 185, 312, 205], [360, 185, 372, 205]];
+        const f = inferStructureIntent([{ facadeId: 1, frame: { ...frame(), height: 340 }, rects: [...upper, ...odd, ...lower] }]).facades[0];
+        expect(f.regions.map(r => r.decision)).toEqual(['repeat', 'neither', 'repeat']);
+        expect(f.evidence?.stacked).toBe(10);
+        for (const cy of [170, 220]) expect(f.windows.filter(w => Math.abs((w.rect[1] + w.rect[3]) / 2 - cy) < 1)).toHaveLength(5);
+        // four piers between five columns, each one piece from the top band to the bottom
+        expect(f.structure?.piers).toHaveLength(4);
+        for (const p of f.structure!.piers) { expect(p[1]).toBeLessThan(15); expect(p[3]).toBeGreaterThan(325); }
+        expect(f.structure!.floors.length).toBeGreaterThanOrEqual(5);
+    });
 });
+

@@ -29,7 +29,8 @@ import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { renderBlueprints, type BlueprintFacade, type BlueprintInputs, type BlueprintWall } from '../../../3d-engine/staged-location/building-blueprint';
 import { detectSymmetry } from '../../../3d-engine/staged-location/pipeline-k/symmetry';
-import { inferStructureIntent } from '../../../3d-engine/staged-location/structure-intent';
+import { inferStructureIntent, type FacadeEvidence } from '../../../3d-engine/staged-location/structure-intent';
+import { facadePhotoFor } from '../../../3d-engine/staged-location/pipeline-k/window-array';
 import { stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 
 export const BUILDING_LINE_DRAWING_TOOL_NAME = 'location_building_line_drawing';
@@ -141,6 +142,19 @@ export function nodesSoup(glbFile: string, names: ReadonlySet<string>): Float32A
     return Float32Array.from(out);
 }
 
+/** A facade photo's luma and masks (pipeline K's straightened ortho beside its uncovered, occluded and featureless masks), for the intent to judge each empty site by; nothing when the photo is not on disk. */
+export function evidenceOf(dir: string, frame: unknown): { evidence?: FacadeEvidence } {
+    const f = frame as { image?: string; width: number; height: number; uncoveredMask?: string; occludedMask?: string };
+    if (!f.image) return {};
+    try {
+        const ph = facadePhotoFor(dir, { image: f.image, width: f.width, height: f.height, uncoveredMask: f.uncoveredMask, occludedMask: f.occludedMask });
+        if (!ph) return {};
+        const n = ph.img.width * ph.img.height, luma = new Float32Array(n), px = ph.img.rgba;
+        for (let i = 0; i < n; i++) luma[i] = (0.2126 * px[4 * i] + 0.7152 * px[4 * i + 1] + 0.0722 * px[4 * i + 2]) / 255;
+        return { evidence: { W: ph.img.width, H: ph.img.height, luma, valid: ph.valid, ...(ph.occluded ? { occluded: ph.occluded } : {}), ...(ph.featureless ? { featureless: ph.featureless } : {}) } };
+    } catch { return {}; }
+}
+
 /** The blueprint sheets: K's windows beside the cut-out, its symmetry read natively there, the run's request as the title. */
 async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: Float32Array, outDir: string, wsDir: string, roots: string[]): Promise<{ summary: string; payload: Record<string, unknown> }> {
     const k = kReadingBeside(glb);
@@ -161,7 +175,7 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
         catch (err) { symmetryNote = `the symmetry reading failed: ${err instanceof Error ? err.message : String(err)}`; }
     }
     // the design intent: each facade's regions decided (repeating, symmetric or neither), what the capture missed inferred from the repeat, the mirror or a twin facade, every repeating band on the building's storey
-    const intent = k?.facades.length ? inferStructureIntent(k.facades.map(f => ({ facadeId: f.facadeId, frame: f.frame, rects: f.rects, panes: f.panes })), inputs.symmetry) : undefined;
+    const intent = k?.facades.length ? inferStructureIntent(k.facades.map(f => ({ facadeId: f.facadeId, frame: f.frame, rects: f.rects, panes: f.panes, ...evidenceOf(k.dir, f.frame) })), inputs.symmetry) : undefined;
     if (intent) inputs.intent = intent;
     if (req.runId) {
         const root = roots.find(r => fs.existsSync(path.join(r, STAGED_CACHE, 'runs', req.runId!, 'stages.json')));
@@ -189,7 +203,8 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
     if (path.resolve(wsDir) !== path.resolve(outDir)) { fs.copyFileSync(materialsJson, path.join(wsDir, 'material_ids.json')); if (intent) fs.copyFileSync(intentJson, path.join(wsDir, 'structure_intent.json')); }
     const decisions: Record<string, number> = {}, sources: Record<string, number> = {};
     for (const f of intent?.facades ?? []) { for (const g of f.regions) decisions[g.decision] = (decisions[g.decision] ?? 0) + 1; for (const w of f.windows) sources[w.source] = (sources[w.source] ?? 0) + 1; }
-    const intentNote = intent ? `the design intent: ${Object.entries(decisions).map(([d, n]) => `${n} regions ${d}`).join(', ')}; windows ${Object.entries(sources).map(([s2, n]) => `${n} ${s2}`).join(', ')}${intent.storey ? `; the building's storey ${intent.storey.pitchM.toFixed(2)} m (${intent.storey.snapped} bands on its floor lines)` : ''}; ${intent.twins.filter(t => t.used).length} twin facade pairs shared` : 'no design intent (no facade readings)';
+    let withheld = 0, extended = 0, stacked = 0, piers = 0; for (const f of intent?.facades ?? []) { withheld += f.evidence?.withheld ?? 0; extended += f.evidence?.extended ?? 0; stacked += f.evidence?.stacked ?? 0; piers += f.structure?.piers.length ?? 0; }
+    const intentNote = intent ? `the design intent: ${Object.entries(decisions).map(([d, n]) => `${n} regions ${d}`).join(', ')}; windows ${Object.entries(sources).map(([s2, n]) => `${n} ${s2}`).join(', ')} (${withheld} sites withheld where the photo reads wall, ${extended} columns carried on toward the walls\' ends, ${stacked} laid through gaps between matching bands; ${piers} piers)${intent.storey ? `; the building's storey ${intent.storey.pitchM.toFixed(2)} m (${intent.storey.snapped} bands on its floor lines)` : ''}; ${intent.twins.filter(t => t.used).length} twin facade pairs shared` : 'no design intent (no facade readings)';
     const roles = new Map<string, number>(); for (const m of report.materials ?? []) roles.set(m.role, (roles.get(m.role) ?? 0) + 1);
     const json = path.join(outDir, 'blueprint.json');
     fs.writeFileSync(json, JSON.stringify({ source: glb, ...(k ? { windowsFrom: k.dir } : {}), ...(inputs.structure ? { structureFrom: structurePath } : {}), ...report }, null, 1));
@@ -207,7 +222,7 @@ export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
         'style "lines" instead draws the scan as plain line drawings: its silhouette edges (black), crease edges (dark grey: corners, setbacks, cornices, pier sides, where two surfaces meet at creaseDeg or more) and open edges (light grey: the scan\'s own holes and cuts), with hidden lines removed, ' +
         'from four sides square to the building\'s own walls (their dominant direction measured from the scan) and from above (the roof plan, which shows the terraces and setbacks). A geometric guide to what the scan measures on every surface. Geometry only, no model call: every line is a measured edge of the scan. ' +
         'With the textured scan (found beside the run\'s cut-out, or texturedGlbPath) the facade detail the geometry is too coarse to hold (windows, bands, spandrels, mullions) is added from the photo: its strongest edges, mid grey, labelled photo-inferred (an edge in the photo may also be a shadow or a smear); the geometry\'s lines stay measured. ' +
-        'The elevation set draws the design intent, not the capture: each facade is split into regions (bands where its window rows change), each decided from evidence as repeating (windows on one pitch: every site of the lattice holds the module, sites the capture missed inferred from the repeat), symmetric (windows mirror about the facade\'s axis: pairs averaged, unpaired windows gain their mirror) or neither (windows stand as read: a one-off is an answer); twin facades the symmetry reading accepted share their windows where they agree; every repeating band sits on the building\'s storey; tall strips of stacked panes are columns of windows. The outline comes from the run\'s measured twin when there is one (its clean shell, fitted to the scan). Every sheet is written as SVG beside its PNG, with a material ID map in the same pixels: each drawn region (wall, roof, recessed bay, spandrel, glass, frame) one material, read from the photo per element and merged by colour with shade read as one material lit differently (photo-inferred), its table in material_ids.json; structure_intent.json gives every region\'s decision with its scores and every window\'s provenance (measured, repeat, mirror, twin). ' +
+        'The elevation set draws the design intent, not the capture: each facade is split into regions (bands where its window rows change), each decided from evidence as repeating (windows on one pitch: every site of the lattice holds the module, sites the capture missed inferred from the repeat), symmetric (windows mirror about the facade\'s axis: pairs averaged, unpaired windows gain their mirror) or neither (windows stand as read: a one-off is an answer); twin facades the symmetry reading accepted share their windows where they agree; every repeating band sits on the building\'s storey; tall strips of stacked panes are columns of windows. Every empty site is judged against the facade photo and its masks before anything is laid there: only a site the photo reads as plain wall is closed (withheld), one it never reached or saw blocked stays open; repeats are carried on toward the wall\'s ends while the photo does not read wall, matching bands are laid through the gaps between them as one shaft, and the frame the windows sit in (piers between the columns, floor lines between the rows) is drawn with them. Oblique faces (a wedge plan\'s sides) are drawn foreshortened. The outline comes from the run\'s measured twin when there is one (its clean shell, fitted to the scan). Every sheet is written as SVG beside its PNG, with a material ID map in the same pixels: each drawn region (wall, roof, recessed bay, spandrel, glass, frame) one material, read from the photo per element and merged by colour with shade read as one material lit differently (photo-inferred), its table in material_ids.json; structure_intent.json gives every region\'s decision with its scores and every window\'s provenance (measured, repeat, mirror, twin). ' +
         'Writes one PNG per view (and, for the elevation set, an SVG, the material ID map and the drawing over it), a JSON report (each view\'s frame, so a pixel maps back to the scan, and what was drawn) and copies them into the workspace under renders/line-drawing/. ' +
         'Give runId (a staged run: its cut-out scan is drawn) or glbPath (any GLB without node transforms).',
     parameters: {
