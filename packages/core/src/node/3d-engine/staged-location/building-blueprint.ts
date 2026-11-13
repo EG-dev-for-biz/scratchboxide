@@ -62,6 +62,8 @@ export interface BlueprintInputs {
     structureFill?: Float32Array | Float64Array;
     /** The textured scan: its photo's strongest edges drawn as the lightest layer, under the constructed lines (detail the readings do not hold: ornament, frames, texture). Photo-inferred. */
     photo?: TileTriangles;
+    /** The whole building's material map (building-material-map.ts): its samples drawn from each view (front-most, on the surface the depth test sees), one colour a material, in a sheet of its own. */
+    surfaceMap?: { p: Float32Array; material: Int32Array; spacingM: number; colours: Array<[number, number, number]> };
     /** The design intent (structure-intent.ts): when given, each facade's windows are drawn from it (repeats, mirrors and twins inferred, each region's organisation decided) in place of the module snap. */
     intent?: StructureIntent;
     title?: string;
@@ -80,6 +82,8 @@ export const BLUEPRINT_PARAMS = {
     windowDepthM: 1.5,
     /** A window overlapping one already drawn by windowDupShare of the smaller is the same window read twice; a bay edge within baySnapM of the windows it holds is drawn on their edge. */
     windowDupShare: 0.1, baySnapM: 0.4, coverGrow: 0.35,
+    /** A material map sample is drawn when it lies at most surfaceDepthM behind the surface the view sees. */
+    surfaceDepthM: 0.5,
     /** A facade's mirror axis is drawn (and its windows mirrored) when its photo matches its mirror at this NCC or more. */
     mirrorNcc: 0.75,
     planMirrorScore: 0.9, planMirrorDeg: 5,
@@ -259,7 +263,7 @@ function svgOf(sheet: Sheet, bg: Vec3): string {
         + `<g stroke="${rgb(sheet.inkC)}" fill="${rgb(sheet.inkC)}" stroke-linecap="square" font-family="monospace">${sheet.vec.join('')}</g></svg>`;
 }
 
-function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number, depthMesh: Mesh = m): { png: Sheet; stats: BlueprintReport['views'][number]; mat: MatSheet } {
+function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number, depthMesh: Mesh = m): { png: Sheet; stats: BlueprintReport['views'][number]; mat: MatSheet; surface?: Uint8Array } {
     const { forward, right, up } = view, isPlan = Math.abs(forward[1]) > 0.9, sc = SCHEMES[P.scheme];
     const u = (i: number) => m.P[3 * i] * right[0] + m.P[3 * i + 1] * right[1] + m.P[3 * i + 2] * right[2];
     const v = (i: number) => m.P[3 * i] * up[0] + m.P[3 * i + 1] * up[1] + m.P[3 * i + 2] * up[2];
@@ -654,7 +658,23 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         const G = groups[g]; G.n++;
         if (rgbPhoto && Number.isFinite(rgbPhoto[3 * i])) { const [L, A, B] = linToLab(rgbPhoto[3 * i], rgbPhoto[3 * i + 1], rgbPhoto[3 * i + 2]); G.c++; G.L += L; G.A += A; G.B += B; }
     }
+    // the whole building's material map from this view: each sample a splat of its spacing, the front-most per pixel, only on the surface the depth test sees
+    let surface: Uint8Array | undefined;
+    if (inputs.surfaceMap) {
+        const sm = inputs.surfaceMap, zb = new Float32Array(dw * dh).fill(Infinity), mid = new Int32Array(dw * dh), r = Math.max(0, Math.round(sm.spacingM / pixelM / 2));
+        for (let i = 0; i < sm.material.length; i++) {
+            const mm = sm.material[i]; if (!mm) continue;
+            const q: Vec3 = [sm.p[3 * i], sm.p[3 * i + 1], sm.p[3 * i + 2]], uu = dot(q, right), vv = dot(q, up), dd = dot(q, forward);
+            const x = Math.round(col(uu)), y = Math.round(row(vv));
+            if (x < 0 || y < 0 || x >= dw || y >= dh) continue;
+            const b = depth[y * dw + x]; if (!Number.isFinite(b) || dd > b + P.surfaceDepthM) continue;
+            for (let yy = Math.max(0, y - r); yy <= Math.min(dh - 1, y + r); yy++) for (let xx = Math.max(0, x - r); xx <= Math.min(dw - 1, x + r); xx++) { const k = yy * dw + xx; if (dd < zb[k]) { zb[k] = dd; mid[k] = mm; } }
+        }
+        surface = new Uint8Array(W * H * 3).fill(255);
+        for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) { const mm = mid[y * dw + x]; if (!mm || !Number.isFinite(depth[y * dw + x])) continue; const c = sm.colours[mm - 1] ?? [128, 128, 128]; surface.set(c, ((y + M) * W + x + M) * 3); }
+    }
     return {
+        ...(surface ? { surface } : {}),
         mat: { inst, dw, dh, M, pixelM, groups, blocks: { bw, bh, px: bpx, group: blockGroup } },
         png: sheet,
         stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, duplicatesSkipped, photoEdgePixels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10], ...(inputs.intent ? { bySource, piers } : {}) }
@@ -826,7 +846,7 @@ export function withoutStreet(soup: Float32Array | Float64Array, P: BlueprintPar
  * material ID map in the same pixels (`material`: each drawn region one material's colour, the table in
  * report.materials; `overlay`: the drawing's lines over it).
  */
-export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string; material: Uint8Array; overlay: Uint8Array }> } {
+export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string; material: Uint8Array; overlay: Uint8Array; surface?: Uint8Array; surfaceOverlay?: Uint8Array }> } {
     const t0 = Date.now();
     // the building alone: the street and the base's loose fill left out of the outline, the depth and the ID map
     const shell = withoutStreet(inputs.structure ?? positions, P);
@@ -839,14 +859,14 @@ export function renderBlueprints(positions: Float32Array | Float64Array, inputs:
     for (let i = 1; i < m.P.length; i += 3) if (m.P[i] < groundY) groundY = m.P[i];
     const labels: Record<string, string> = { north: 'ELEVATION A', east: 'ELEVATION B', south: 'ELEVATION C', west: 'ELEVATION D', plan: 'ROOF PLAN' };
     const views = CARDINAL_VIEWS.map(v => turned(v, azimuth));
-    const sheets: Array<{ png: Sheet; mat: MatSheet }> = [], stats: BlueprintReport['views'] = [];
+    const sheets: Array<{ png: Sheet; mat: MatSheet; surface?: Uint8Array }> = [], stats: BlueprintReport['views'] = [];
     for (const view of views) {
-        const { png, stats: s, mat } = renderSheet(m, view, labels[view.name] ?? view.name.toUpperCase(), inputs, P, azimuth, groundY, depthMesh);
-        sheets.push({ png, mat }); stats.push(s);
+        const { png, stats: s, mat, surface } = renderSheet(m, view, labels[view.name] ?? view.name.toUpperCase(), inputs, P, azimuth, groundY, depthMesh);
+        sheets.push({ png, mat, ...(surface ? { surface } : {}) }); stats.push(s);
     }
     const { entries, perView } = assignMaterials(sheets.map(s => s.mat), P);
     const colorOf = new Map(entries.map(e => [e.id, e.idColor]));
-    const pngs = sheets.map(({ png, mat }, v) => {
+    const pngs = sheets.map(({ png, mat, surface }, v) => {
         const material = new Uint8Array(png.W * png.H * 3).fill(255), overlay = new Uint8Array(png.W * png.H * 3);
         for (let y = 0; y < mat.dh; y++) for (let x = 0; x < mat.dw; x++) {
             const g = mat.inst[y * mat.dw + x]; if (g < 0) continue;
@@ -855,7 +875,9 @@ export function renderBlueprints(positions: Float32Array | Float64Array, inputs:
         }
         // the drawing over the map: each pixel the map's colour darkened by the drawing's ink
         for (let i = 0; i < png.W * png.H; i++) { const k = (png.rgb[3 * i] + png.rgb[3 * i + 1] + png.rgb[3 * i + 2]) / 765; for (let c = 0; c < 3; c++) overlay[3 * i + c] = Math.round(material[3 * i + c] * k); }
-        return { name: views[v].name, width: png.W, height: png.H, rgb: png.rgb, svg: svgOf(png, SCHEMES[P.scheme].bg), material, overlay };
+        let surfaceOverlay: Uint8Array | undefined;
+        if (surface) { surfaceOverlay = new Uint8Array(png.W * png.H * 3); for (let i = 0; i < png.W * png.H; i++) { const k = (png.rgb[3 * i] + png.rgb[3 * i + 1] + png.rgb[3 * i + 2]) / 765; for (let c = 0; c < 3; c++) surfaceOverlay[3 * i + c] = Math.round(surface[3 * i + c] * k); } }
+        return { name: views[v].name, width: png.W, height: png.H, rgb: png.rgb, svg: svgOf(png, SCHEMES[P.scheme].bg), material, overlay, ...(surface ? { surface, surfaceOverlay } : {}) };
     });
     return { report: { version: BLUEPRINT_VERSION, params: P, wallAzimuthDeg: azimuth, streetDroppedM2: Math.round(shell.droppedM2), views: stats, materials: entries, ms: Date.now() - t0 }, pngs };
 }

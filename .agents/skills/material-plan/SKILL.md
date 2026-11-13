@@ -36,6 +36,23 @@ shadow inside a wall is the wall's material, and repeats, mirrors and twin facad
 - **Library**: candidates only where a finish was read (colour alone cannot tell glass from steel), pipeline K's own
   pick first.
 
+## 2b. The whole building: continuous materials, the light told apart
+
+The facade photos miss roofs, terraces, setbacks, the crown and every plane K did not straighten. For the whole
+building, read the material map (`location_building_line_drawing` with `materialMap: true`; `building-material-map.ts`):
+
+- **Read the de-lit twin** (pipeline K's `twin.glb`: de-lit, roof shadows lifted, harmonised). A raw textured scan still
+  carries the capture's light, and its map splits one wall into lit and shaded blotches; say so when that is the input.
+- **Patches every 0.4 m** over every surface, grown into continuous regions: a smooth gradient of light, a corner between
+  a lit face and a shaded one, and a shadow-like step whose chroma matches all stay one region; a chroma step the light
+  does not explain splits it.
+- **The light is measured on the building**: the shadow shift (darker reads bluer) from lit/shadow pairs on one
+  surface, the orientation shift from roof-wall corners; both are removed before materials are compared.
+- **Materials in two stages**: first shadows join (their compensated chroma matches, a cast shadow's step free), then
+  exposure and orientation by mean shift (each group read as it looks lit), so no chain runs from dark to light.
+- **The structure decides what colour cannot**: dark glass and shaded stone can be one neutral grey. The structure
+  intent's openings are given to the map: samples in them and on the wall never share a region or a material.
+
 ## 3. Use it
 
 - **Infill**: a texel the photo never reached takes its element's material: patches from that material's exemplars at
