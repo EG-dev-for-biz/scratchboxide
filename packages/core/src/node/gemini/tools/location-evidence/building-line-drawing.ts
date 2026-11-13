@@ -24,7 +24,7 @@ import * as path from 'path';
 import type { ToolDeclaration, ToolHandler, ToolHandlerOutcome } from '../types';
 import { parseGlbBytes } from '../../../3d-engine/staged-location/glb-bytes';
 import { glbSoup } from '../../../3d-engine/staged-location/facade-lattice';
-import { CARDINAL_VIEWS, LINE_DRAWING_PARAMS, renderBuildingLineDrawings, type LineDrawingParams } from '../../../3d-engine/staged-location/building-line-drawing';
+import { LINE_DRAWING_PARAMS, renderBuildingLineDrawings, type LineDrawingParams } from '../../../3d-engine/staged-location/building-line-drawing';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 
@@ -74,7 +74,7 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
         ...(req.creaseDeg !== undefined && req.creaseDeg > 0 && req.creaseDeg < 180 ? { creaseDeg: req.creaseDeg } : {}),
         ...(req.minEdgeLenM !== undefined && req.minEdgeLenM >= 0 ? { minEdgeLenM: req.minEdgeLenM } : {})
     };
-    const { report, pngs } = renderBuildingLineDrawings(soup, CARDINAL_VIEWS, P);
+    const { report, pngs } = renderBuildingLineDrawings(soup, undefined, P);
     const name = req.runId ?? path.basename(glb, '.glb');
     const outDir = req.outputDir ? within(req.outputDir) : path.join(stagedRoot, STAGED_CACHE, 'line_drawing', name);
     const wsDir = path.join(workspaceRoot || stagedRoot, 'renders', 'line-drawing', name);
@@ -91,7 +91,7 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
     fs.writeFileSync(json, JSON.stringify({ source: glb, ...report }, null, 1));
     const per = report.views.map(v => `${v.name} ${v.width}x${v.height} px at ${Math.round(v.pixelM * 1000) / 1000} m (silhouette ${v.silhouette.drawn}, crease ${v.crease.drawn}, open edges ${v.boundary.drawn})`).join('; ');
     return {
-        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: the scan's silhouette and creases, hidden lines removed, from ${report.views.length} views (${per}); ${report.triangles.toLocaleString('en-US')} triangles; measured (geometry only). Files in ${wsDir}.`,
+        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: the scan's silhouette and creases, hidden lines removed, from ${report.views.length} views turned ${report.wallAzimuthDeg} degrees to face its walls (${per}); ${report.triangles.toLocaleString('en-US')} triangles; measured (geometry only). Files in ${wsDir}.`,
         payload: { source: glb, reportJson: json, files, report }
     };
 }
@@ -99,7 +99,7 @@ export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, wo
 export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
     name: BUILDING_LINE_DRAWING_TOOL_NAME,
     description: 'Draw a staged building\'s scan as line drawings, the way elevations and a plan draw a building: its silhouette edges (black), crease edges (dark grey: corners, setbacks, cornices, pier sides, where two surfaces meet at creaseDeg or more) and open edges (light grey: the scan\'s own holes and cuts), with hidden lines removed, ' +
-        'from the north, east, south and west and from above (the roof plan, which shows the terraces and setbacks). A geometric guide to what the scan measures on every surface. Geometry only, no model call: every line is a measured edge of the scan. ' +
+        'from four sides square to the building\'s own walls (their dominant direction measured from the scan) and from above (the roof plan, which shows the terraces and setbacks). A geometric guide to what the scan measures on every surface. Geometry only, no model call: every line is a measured edge of the scan. ' +
         'Writes one PNG per view and line_drawing.json (each view\'s frame, so a pixel maps back to the scan, and the edges found and drawn by kind) and copies the PNGs into the workspace under renders/line-drawing/. ' +
         'Give runId (a staged run: its cut-out scan is drawn) or glbPath (any GLB without node transforms).',
     parameters: {

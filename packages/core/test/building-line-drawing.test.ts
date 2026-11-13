@@ -43,6 +43,22 @@ describe('building line drawing: silhouette and crease, hidden lines removed', (
         expect(at(col(3), row(5))).toBe(255);          // where the hidden box's left edge would be drawn
     });
 
+    it('turns the views to face a building standing off the axes', () => {
+        // a 20 x 10 x 30 m box turned 30 degrees about the vertical
+        const r = (30 * Math.PI) / 180, c = Math.cos(r), sn = Math.sin(r);
+        const raw = box(-10, 0, -5, 10, 30, 5), soup = new Float32Array(raw.length);
+        for (let i = 0; i < raw.length; i += 3) { soup[i] = raw[i] * c - raw[i + 2] * sn; soup[i + 1] = raw[i + 1]; soup[i + 2] = raw[i] * sn + raw[i + 2] * c; }
+        const { report } = renderBuildingLineDrawings(soup, undefined, { ...LINE_DRAWING_PARAMS, pixelM: 0.1 });
+        expect(report.wallAzimuthDeg).toBeCloseTo(30, 0);
+        // each elevation sees one face square on: only its four outline edges, and its width the face's own (20 or 10 m),
+        // not a foreshortened corner view
+        for (const v of report.views.filter(x => x.name !== 'plan')) {
+            expect(v.silhouette.drawn).toBe(4);
+            const w = v.width * v.pixelM;
+            expect(Math.min(Math.abs(w - 20), Math.abs(w - 10))).toBeLessThan(0.5);
+        }
+    });
+
     it('draws a setback as a crease in elevation and as a ring in plan', () => {
         // a podium with a narrower tower on it: one mesh, the podium's roof cut around the tower's foot
         const soup = Float32Array.from([...box(0, 0, 0, 20, 5, 20), ...box(5, 5, 5, 15, 30, 15)]);
@@ -66,6 +82,9 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         const r = await runBuildingLineDrawing({ glbPath: ESB_CLAY, outputDir: path.join(work, 'out') }, work, work);
         const rep = r.payload.report as { triangles: number; views: Array<{ name: string; width: number; height: number; silhouette: { drawn: number }; crease: { drawn: number } }> };
         expect(rep.triangles).toBeGreaterThan(40_000);
+        // Manhattan's grid: the ESB's walls stand about 29 degrees off the scene's axes (or 61, the same grid a quarter on)
+        const az = (r.payload.report as { wallAzimuthDeg: number }).wallAzimuthDeg;
+        expect(Math.min(Math.abs(az - 29), Math.abs(az - 61))).toBeLessThan(3);
         expect(rep.views.map(v => v.name)).toEqual(['north', 'east', 'south', 'west', 'plan']);
         const files = r.payload.files as Array<{ view: string; path: string; workspacePath: string }>;
         for (const f of files) {

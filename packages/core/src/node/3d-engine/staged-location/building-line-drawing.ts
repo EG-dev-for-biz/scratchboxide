@@ -15,7 +15,10 @@
  * roofs, terraces and setbacks no facade ortho covers. Diagnostic and reference only: nothing downstream reads it yet.
  *
  * Method (classic hidden-line removal, no model call, geometry only):
- *  1. The scan's triangles are welded by position (a shared vertex gets one id) and their face normals computed.
+ *  1. The scan's triangles are welded by position (a shared vertex gets one id) and their face normals computed. The
+ *     views are turned to face the building's own walls: the walls' dominant direction (each wall triangle's horizontal
+ *     normal angle, folded to a quarter turn and weighted by its area, the peak of a smoothed 1-degree histogram), so an
+ *     elevation looks straight at a facade instead of foreshortening it (Manhattan's grid stands 29 degrees off east).
  *  2. Every edge is classified by its 1-2 (or, at a weld seam, more) adjacent triangles' facing toward the view and the
  *     dihedral angle between them: a boundary edge of a front-facing triangle, or one whose triangles face opposite ways,
  *     is a silhouette edge; one whose two front-facing triangles meet at creaseDeg or more is a crease edge (a cornice,
@@ -63,6 +66,8 @@ export const CARDINAL_VIEWS: LineDrawingView[] = [
 export interface LineDrawingReport {
     version: string;
     params: LineDrawingParams;
+    /** The turn (degrees, about the vertical) the cardinal views were given to face the building's walls; 0 when views were given. */
+    wallAzimuthDeg: number;
     triangles: number; weldedVertices: number; edges: number;
     views: Array<{
         name: string; width: number; height: number; pixelM: number;
@@ -76,9 +81,12 @@ export interface LineDrawingReport {
     ms: number;
 }
 
-export const LINE_DRAWING_VERSION = 'building-line-drawing/1';
+export const LINE_DRAWING_VERSION = 'building-line-drawing/2';
 
 // --- geometry -----------------------------------------------------------------------------------------------------
+
+/** A triangle faces the view only when its normal points back at it by more than this (an edge-on face, seen exactly side on, is not front-facing: rounding would otherwise draw its far edge over its near one). */
+const FACING_EPS = 1e-3;
 
 interface Mesh { P: Float64Array; tris: Int32Array; normal: Float64Array; triCount: number }
 
@@ -126,7 +134,7 @@ function classifyEdges(m: Mesh, forward: Vec3, creaseCos: number, minEdgeLenM: n
             (faces.get(k) ?? faces.set(k, []).get(k)!).push(t);
         }
     }
-    const front = (t: number) => m.normal[3 * t] * forward[0] + m.normal[3 * t + 1] * forward[1] + m.normal[3 * t + 2] * forward[2] < 0;
+    const front = (t: number) => m.normal[3 * t] * forward[0] + m.normal[3 * t + 1] * forward[1] + m.normal[3 * t + 2] * forward[2] < -FACING_EPS;
     const out: EdgeClass[] = [];
     for (const [k, tris] of faces) {
         const a = Math.floor(k / 0x100000), b = k % 0x100000;
@@ -174,7 +182,7 @@ function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineD
     let frontFacing = 0;
     for (let t = 0; t < m.triCount; t++) {
         const a = m.tris[3 * t], b = m.tris[3 * t + 1], c = m.tris[3 * t + 2];
-        if (m.normal[3 * t] * forward[0] + m.normal[3 * t + 1] * forward[1] + m.normal[3 * t + 2] * forward[2] >= 0) continue; // backface: not an occluder
+        if (m.normal[3 * t] * forward[0] + m.normal[3 * t + 1] * forward[1] + m.normal[3 * t + 2] * forward[2] >= -FACING_EPS) continue; // backface or edge-on: not an occluder
         ++frontFacing;
         const ca = col(u(a)), ra = row(v(a)), cb = col(u(b)), rb = row(v(b)), cc = col(u(c)), rc = row(v(c));
         const x0 = Math.max(0, Math.floor(Math.min(ca, cb, cc))), x1 = Math.min(W - 1, Math.ceil(Math.max(ca, cb, cc)));
@@ -218,19 +226,59 @@ function renderView(m: Mesh, view: LineDrawingView, edges: EdgeClass[], P: LineD
     };
 }
 
+/** The walls' dominant direction (degrees in [0, 90)): each near-vertical triangle's horizontal normal angle folded to a quarter turn, weighted by area; the peak of a 1-degree histogram smoothed over 5 degrees, refined to the area-weighted mean of the angles within 4 degrees of it. */
+export function wallAzimuthDeg(m: { normal: Float64Array; P: Float64Array; tris: Int32Array; triCount: number }): number {
+    const hist = new Float64Array(90), angles: number[] = [], areas: number[] = [];
+    for (let t = 0; t < m.triCount; t++) {
+        const nx = m.normal[3 * t], ny = m.normal[3 * t + 1], nz = m.normal[3 * t + 2];
+        if (Math.abs(ny) > 0.3) continue;
+        const a = m.tris[3 * t], b = m.tris[3 * t + 1], c = m.tris[3 * t + 2];
+        const abx = m.P[3 * b] - m.P[3 * a], aby = m.P[3 * b + 1] - m.P[3 * a + 1], abz = m.P[3 * b + 2] - m.P[3 * a + 2];
+        const acx = m.P[3 * c] - m.P[3 * a], acy = m.P[3 * c + 1] - m.P[3 * a + 1], acz = m.P[3 * c + 2] - m.P[3 * a + 2];
+        const area = Math.hypot(aby * acz - abz * acy, abz * acx - abx * acz, abx * acy - aby * acx) / 2;
+        let deg = (Math.atan2(nz, nx) * 180) / Math.PI;
+        deg = ((deg % 90) + 90) % 90;
+        hist[Math.min(89, Math.floor(deg))] += area;
+        angles.push(deg); areas.push(area);
+    }
+    let best = 0, bestV = -1;
+    for (let i = 0; i < 90; i++) { let v = 0; for (let k = -2; k <= 2; k++) v += hist[(i + k + 90) % 90]; if (v > bestV) { bestV = v; best = i; } }
+    // refine: the weighted mean of the angles near the peak, each taken on the peak's side of the quarter-turn wrap
+    const peak = best + 0.5;
+    let sum = 0, wsum = 0;
+    for (let i = 0; i < angles.length; i++) {
+        let d = angles[i] - peak;
+        d -= 90 * Math.round(d / 90);
+        if (Math.abs(d) > 4) continue;
+        sum += (peak + d) * areas[i]; wsum += areas[i];
+    }
+    const mean = wsum > 0 ? sum / wsum : peak;
+    return Math.round((((mean % 90) + 90) % 90) * 100) / 100;
+}
+
+/** A view turned by deg about the vertical (its forward, right and up all turned). */
+function turned(v: LineDrawingView, deg: number): LineDrawingView {
+    const r = (deg * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+    const rot = (p: Vec3): Vec3 => [p[0] * c - p[2] * s, p[1], p[0] * s + p[2] * c];
+    return { name: v.name, forward: rot(v.forward), right: rot(v.right), up: rot(v.up) };
+}
+
 /**
  * The scan's silhouette and crease, hidden-line removed, from each view (default: north, east, south, west and the
  * roof plan). `positions` is a triangle soup (9 floats a triangle) in the frame the result is reported in (the scan's
  * own, untransformed, as `clay.glb` carries no node transforms).
  */
-export function renderBuildingLineDrawings(positions: Float32Array | Float64Array, views: LineDrawingView[] = CARDINAL_VIEWS, P: LineDrawingParams = LINE_DRAWING_PARAMS): { report: LineDrawingReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> } {
+export function renderBuildingLineDrawings(positions: Float32Array | Float64Array, views?: LineDrawingView[], P: LineDrawingParams = LINE_DRAWING_PARAMS): { report: LineDrawingReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> } {
     const t0 = Date.now();
     const m = weld(positions);
+    // with no views given, the cardinal ones turned to face the building's walls
+    const azimuth = views ? 0 : wallAzimuthDeg(m);
+    const useViews = views ?? CARDINAL_VIEWS.map(v => turned(v, azimuth));
     const creaseCos = Math.cos((P.creaseDeg * Math.PI) / 180);
     const pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> = [];
     const viewReports: LineDrawingReport['views'] = [];
     let edgeTotal = 0;
-    for (const view of views) {
+    for (const view of useViews) {
         const tv = Date.now();
         const edges = classifyEdges(m, view.forward, creaseCos, P.minEdgeLenM);
         edgeTotal += edges.length;
@@ -239,7 +287,7 @@ export function renderBuildingLineDrawings(positions: Float32Array | Float64Arra
         viewReports.push(stats);
     }
     return {
-        report: { version: LINE_DRAWING_VERSION, params: P, triangles: m.triCount, weldedVertices: m.P.length / 3, edges: edgeTotal, views: viewReports, ms: Date.now() - t0 },
+        report: { version: LINE_DRAWING_VERSION, params: P, wallAzimuthDeg: azimuth, triangles: m.triCount, weldedVertices: m.P.length / 3, edges: edgeTotal, views: viewReports, ms: Date.now() - t0 },
         pngs
     };
 }
