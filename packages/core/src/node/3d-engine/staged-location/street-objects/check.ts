@@ -37,8 +37,13 @@ export const CHECK_PARAMS = {
     renderScale: 0.5,
     /** Bands under this many photo pixels are not compared. */
     minBandPixels: 20,
-    /** And a rebuild must match the photos at least this well (silhouette IoU) to be kept, whatever the scan scores. */
-    minIou: 0.3
+    /**
+     * And a rebuild must match the photos at least this well (silhouette IoU) to be kept, whatever the scan scores, and by
+     * at least minIouGain more than the scan's blob (MAIN, 2026-11-09: at 0.3 a green cylinder on a grey disc passed for a
+     * planter, a kiosk kept an orange bracket, bins barely read).
+     */
+    minIou: 0.5,
+    minIouGain: 0.15
 };
 
 export interface ViewCheck {
@@ -212,11 +217,11 @@ export function judgeFamily(all: ViewCheck[], P = CHECK_PARAMS): FamilyCheck {
     const shapeBetter = iouR > iouS;
     const colourMeasured = Number.isFinite(dR) && Number.isFinite(dS);
     const colourBetter = colourMeasured && dR < dS;
-    const fits = iouR >= P.minIou;
+    const fits = iouR >= P.minIou && iouR - iouS >= P.minIouGain;
     const keep = shapeBetter && colourBetter && fits;
     const say = `silhouette IoU ${r3(iouR)} rebuilt against ${r3(iouS)} scanned; colour ΔE ${Number.isFinite(dR) ? r1(dR) : 'n/a'} rebuilt against ${Number.isFinite(dS) ? r1(dS) : 'n/a'} scanned, over ${views.length} view${views.length === 1 ? '' : 's'} (${w} photo pixels)`;
     return {
         views, iouRebuild: r3(iouR), iouScan: r3(iouS), deltaERebuild: r1(dR), deltaEScan: r1(dS), keep,
-        reason: keep ? `kept: ${say}` : `the scan stays: ${!shapeBetter ? 'the rebuild\'s silhouette is no closer to the photos' : !fits ? `the rebuild matches the photos under IoU ${P.minIou}` : !colourMeasured ? 'the colours could not both be measured against the photos' : 'the rebuild\'s colour is no closer to the photos'} (${say})`
+        reason: keep ? `kept: ${say}` : `the scan stays: ${!shapeBetter ? 'the rebuild\'s silhouette is no closer to the photos' : !fits ? (iouR < P.minIou ? `the rebuild matches the photos under IoU ${P.minIou}` : `the rebuild's silhouette is less than ${P.minIouGain} closer to the photos than the scan's`) : !colourMeasured ? 'the colours could not both be measured against the photos' : 'the rebuild\'s colour is no closer to the photos'} (${say})`
     };
 }
