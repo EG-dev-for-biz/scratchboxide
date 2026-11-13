@@ -71,8 +71,9 @@ Call `location_building_line_drawing` (style `blueprint`, the default). It runs 
   lines; oblique faces (a wedge plan's sides) foreshortened;
 - `material_<view>.png`: every drawn region one material ID. Each element (a window family's glass and frames, a
   wall's bays, a facade's spandrels, the bare wall in blocks) is read from the photo as a whole, merged by colour with
-  shade read as one material lit differently, and the bare surface takes its neighbourhood's majority, so a stain or a
-  shadow inside a wall is the wall's material. Repeats, mirrors and twins share their source's material;
+  shade read as one material lit differently; the bare wall takes one material per facade region (a band of one
+  design), and elsewhere its neighbourhood's majority, so a stain or a shadow inside a wall is the wall's material. The
+  street and loose fill outside the building's footprint (its closed plan outline from 3 m up) are left out. Repeats, mirrors and twins share their source's material;
 - `material_lines_<view>.png`: the drawing over the ID map, to check that lines and materials agree;
 - `material_ids.json` (each ID's role, colour in the map, mean photo colour, area, provenance) and
   `structure_intent.json` (each region's decision with its scores, each window's provenance: measured, repeat,

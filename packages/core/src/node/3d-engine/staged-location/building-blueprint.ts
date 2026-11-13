@@ -96,6 +96,13 @@ export const BLUEPRINT_PARAMS = {
     scheme: 'ink' as 'ink' | 'blueprint',
     gridM: 10, marginPx: 150, titlePx: 170,
     /** The material ID map: a window's frame this wide (m) around its glass and along its mullions; the bare surface judged in blocks of matBlockM, each block taking its neighbourhood's majority; element groups of one role within matDeltaE (CIELAB) are one material, the bare surface's within matDeltaESurface; a material under matMinShare of its role's area joins its nearest. */
+    /**
+     * The street and the base's loose fill are not the building: a triangle facing up (normal y above streetUpNy) within
+     * streetM of the ground goes, and so does any triangle wholly below footprintAboveM whose centroid lies outside the
+     * building's footprint (the plan the scan covers above footprintAboveM, on a footprintCellM grid, grown by
+     * footprintMarginM).
+     */
+    streetM: 1, streetUpNy: 0.7, footprintAboveM: 3, footprintCellM: 0.5, footprintMarginM: 1.5,
     frameM: 0.08, matBlockM: 1, matDeltaE: 6, matDeltaESurface: 7, matMinShare: 0.03,
     /** Lightness counts this much against chroma (taken relative to lightness) in the material distance: shade and exposure change a material's lightness, a different material its hue (the lighting reads as one material lit differently); a 50-unit lightness step still splits. */
     matLightWeight: 0.15,
@@ -106,6 +113,8 @@ export type BlueprintParams = typeof BLUEPRINT_PARAMS;
 
 export interface BlueprintReport {
     version: string; params: BlueprintParams; wallAzimuthDeg: number;
+    /** Area of street and loose base fill left out (withoutStreet). */
+    streetDroppedM2?: number;
     views: Array<{
         name: string; label: string; width: number; height: number; pixelM: number; originU: number; originV: number; right: Vec3; up: Vec3; forward: Vec3;
         outlineEdges: number; ledges: number; walls: number; bays: number; facades: number; windows: number; panes: number; sills: number; spandrels: number;
@@ -290,6 +299,23 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         }
     };
     const rgbPhoto = inputs.photo ? new Float32Array(dw * dh * 3) : undefined;
+    // each pixel's facade region (a band of one design, from the intent): the bare wall takes its material per region, not per block
+    const regionAt = new Int32Array(dw * dh).fill(-1), regionKeys: string[] = [];
+    const fillRegion = (q: Vec3[], id: number) => {
+        const xs = q.map(p => col(dot(p, right))), ys = q.map(p => row(dot(p, up))), ds = q.map(p => dot(p, forward));
+        const x0 = Math.max(0, Math.floor(Math.min(...xs))), x1 = Math.min(dw - 1, Math.ceil(Math.max(...xs))), y0 = Math.max(0, Math.floor(Math.min(...ys))), y1 = Math.min(dh - 1, Math.ceil(Math.max(...ys)));
+        for (const tri of [[0, 1, 2], [0, 2, 3]]) {
+            const [a, b, c2] = tri, area = (xs[b] - xs[a]) * (ys[c2] - ys[a]) - (xs[c2] - xs[a]) * (ys[b] - ys[a]);
+            if (!(Math.abs(area) > 1e-9)) continue;
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                const i = y * dw + x; if (regionAt[i] >= 0 || !Number.isFinite(depth[i])) continue;
+                const px = x + 0.5, py = y + 0.5;
+                const w0 = ((xs[b] - px) * (ys[c2] - py) - (xs[c2] - px) * (ys[b] - py)) / area, w1 = ((xs[c2] - px) * (ys[a] - py) - (xs[a] - px) * (ys[c2] - py)) / area, w2 = 1 - w0 - w1;
+                if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+                if (Math.abs(w0 * ds[a] + w1 * ds[b] + w2 * ds[c2] - depth[i]) <= P.windowDepthM) regionAt[i] = id;
+            }
+        }
+    };
     const bySource: Partial<Record<IntentSource, number>> = {};
 
     if (P.scheme === 'blueprint') {
@@ -324,6 +350,18 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     let duplicatesSkipped = 0;
 
     const cosFacing = Math.cos((P.facingDeg * Math.PI) / 180);
+    // 0a. the facade regions, nearest facade first: each band spans its facade's width, from halfway to the band above to halfway to the band below
+    if (!isPlan && inputs.intent) for (const fc of [...(inputs.facades ?? [])].sort((a, b) => dot(a.frame.centroid, forward) - dot(b.frame.centroid, forward))) {
+        const f = fc.frame, fi = inputs.intent.facades.find(x => x.facadeId === fc.facadeId);
+        if (!fi?.regions.length || -dot(f.normal, forward) < Math.cos((P.facingDeg * Math.PI) / 180)) continue;
+        const world = (x: number, y: number): Vec3 => { const s0 = f.orthoSMin + x * f.pixel, t0 = f.orthoTMax - y * f.pixel; return [f.centroid[0] + s0 * f.axisS[0] + t0 * f.axisT[0], f.centroid[1] + s0 * f.axisS[1] + t0 * f.axisT[1], f.centroid[2] + s0 * f.axisS[2] + t0 * f.axisT[2]]; };
+        const regs = fi.regions.map((r, k) => ({ r, k })).sort((a, b) => a.r.y0 - b.r.y0);
+        regs.forEach(({ r, k }, j) => {
+            const top = j === 0 ? 0 : (regs[j - 1].r.y1 + r.y0) / 2, bot = j === regs.length - 1 ? f.height : (r.y1 + regs[j + 1].r.y0) / 2;
+            const id = regionKeys.length; regionKeys.push(`${fc.facadeId}.${k}`);
+            fillRegion([world(0, bot), world(f.width, bot), world(f.width, top), world(0, top)], id);
+        });
+    }
     // 0b. the frame the intent inferred: each pier between two window columns, its two edges one continuous line down the shaft (structure); drawn first so the measured bays and the windows paint over it in the ID map
     let piers = 0;
     if (!isPlan && inputs.intent) for (const fc of [...(inputs.facades ?? [])].sort((a, b) => dot(a.frame.centroid, forward) - dot(b.frame.centroid, forward))) {
@@ -572,6 +610,8 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) {
         const i = y * dw + x;
         if (inst[i] >= 0 || !Number.isFinite(depth[i])) continue;
+        // inside a facade region: the region's wall, one group (one material) for the whole band; elsewhere a block
+        if (regionAt[i] >= 0) { inst[i] = groupOf(surfaceRole, `region.${regionKeys[regionAt[i]]}`); continue; }
         const b = Math.floor(y / bpx) * bw + Math.floor(x / bpx);
         if (blockGroup[b] < 0) blockGroup[b] = groupOf(surfaceRole, `${view.name}.${b}`);
         inst[i] = blockGroup[b];
@@ -683,6 +723,70 @@ function assignMaterials(mats: MatSheet[], P: BlueprintParams): { entries: Mater
     return { entries, perView: gMat.map(a => Int32Array.from(a, i => (i >= 0 ? idOf.get(i) ?? 0 : 0))) };
 }
 
+/** The building alone: the street and the base's loose fill outside the building's footprint left out (see BLUEPRINT_PARAMS.streetM). */
+export function withoutStreet(soup: Float32Array | Float64Array, P: BlueprintParams = BLUEPRINT_PARAMS): { soup: Float32Array | Float64Array; droppedM2: number } {
+    let gy = Infinity;
+    for (let i = 1; i < soup.length; i += 3) if (soup[i] < gy) gy = soup[i];
+    if (!Number.isFinite(gy)) return { soup, droppedM2: 0 };
+    // the footprint: the plan the building above footprintAboveM traces (every edge of its triangles walked at half a
+    // cell, every triangle's plan filled), closed: a cell the outside cannot reach by flood is inside the building
+    const c = P.footprintCellM, nTri = soup.length / 9;
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < soup.length; i += 3) { minX = Math.min(minX, soup[i]); maxX = Math.max(maxX, soup[i]); minZ = Math.min(minZ, soup[i + 2]); maxZ = Math.max(maxZ, soup[i + 2]); }
+    const pad = 2, gw = Math.ceil((maxX - minX) / c) + 1 + 2 * pad, gh = Math.ceil((maxZ - minZ) / c) + 1 + 2 * pad;
+    const cx = (x: number) => Math.floor((x - minX) / c) + pad, cz = (z: number) => Math.floor((z - minZ) / c) + pad;
+    const traced = new Uint8Array(gw * gh);
+    let any = false;
+    for (let t = 0; t < nTri; t++) {
+        const o = 9 * t;
+        if (Math.min(soup[o + 1], soup[o + 4], soup[o + 7]) - gy < P.footprintAboveM) continue;
+        any = true;
+        const X = [soup[o], soup[o + 3], soup[o + 6]], Z = [soup[o + 2], soup[o + 5], soup[o + 8]];
+        for (let k = 0; k < 3; k++) {
+            const x0 = X[k], z0 = Z[k], x1 = X[(k + 1) % 3], z1 = Z[(k + 1) % 3], n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / (c / 2)));
+            for (let j = 0; j <= n; j++) traced[cz(z0 + ((z1 - z0) * j) / n) * gw + cx(x0 + ((x1 - x0) * j) / n)] = 1;
+        }
+        const area = (X[1] - X[0]) * (Z[2] - Z[0]) - (X[2] - X[0]) * (Z[1] - Z[0]);
+        if (Math.abs(area) < c * c) continue;
+        for (let gz = cz(Math.min(...Z)); gz <= cz(Math.max(...Z)); gz++) for (let gx = cx(Math.min(...X)); gx <= cx(Math.max(...X)); gx++) {
+            const px = minX + (gx - pad + 0.5) * c, pz = minZ + (gz - pad + 0.5) * c;
+            const w0 = ((X[1] - px) * (Z[2] - pz) - (X[2] - px) * (Z[1] - pz)) / area, w1 = ((X[2] - px) * (Z[0] - pz) - (X[0] - px) * (Z[2] - pz)) / area;
+            if (w0 >= 0 && w1 >= 0 && w0 + w1 <= 1) traced[gz * gw + gx] = 1;
+        }
+    }
+    if (!any) return { soup, droppedM2: 0 };
+    // grow the traced cells by the margin, then flood the outside from the grid's border
+    const grow = Math.ceil(P.footprintMarginM / c), wall = new Uint8Array(gw * gh);
+    for (let z = 0; z < gh; z++) for (let x = 0; x < gw; x++) if (traced[z * gw + x]) for (let j = -grow; j <= grow; j++) for (let i = -grow; i <= grow; i++) { const xx = x + i, zz = z + j; if (xx >= 0 && zz >= 0 && xx < gw && zz < gh) wall[zz * gw + xx] = 1; }
+    const outside = new Uint8Array(gw * gh), stack: number[] = [];
+    for (let x = 0; x < gw; x++) stack.push(x, (gh - 1) * gw + x);
+    for (let z = 0; z < gh; z++) stack.push(z * gw, z * gw + gw - 1);
+    while (stack.length) {
+        const i = stack.pop()!;
+        if (outside[i] || wall[i]) continue;
+        outside[i] = 1;
+        const x = i % gw, z = (i - x) / gw;
+        if (x > 0) stack.push(i - 1); if (x < gw - 1) stack.push(i + 1); if (z > 0) stack.push(i - gw); if (z < gh - 1) stack.push(i + gw);
+    }
+    const inFoot = (x: number, z: number) => !outside[cz(z) * gw + cx(x)];
+    const keep: number[] = [];
+    let dropped = 0;
+    for (let t = 0; t < nTri; t++) {
+        const o = 9 * t;
+        const e1 = [soup[o + 3] - soup[o], soup[o + 4] - soup[o + 1], soup[o + 5] - soup[o + 2]], e2 = [soup[o + 6] - soup[o], soup[o + 7] - soup[o + 1], soup[o + 8] - soup[o + 2]];
+        const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], len = Math.hypot(n[0], n[1], n[2]);
+        const ymax = Math.max(soup[o + 1], soup[o + 4], soup[o + 7]) - gy;
+        const street = len > 0 && n[1] / len > P.streetUpNy && ymax <= P.streetM;
+        const loose = ymax < P.footprintAboveM && !inFoot((soup[o] + soup[o + 3] + soup[o + 6]) / 3, (soup[o + 2] + soup[o + 5] + soup[o + 8]) / 3);
+        if (street || loose) { dropped += len / 2; continue; }
+        keep.push(t);
+    }
+    if (keep.length === nTri) return { soup, droppedM2: 0 };
+    const out = new Float32Array(keep.length * 9);
+    keep.forEach((t, i) => { for (let k = 0; k < 9; k++) out[9 * i + k] = soup[9 * t + k]; });
+    return { soup: out, droppedM2: dropped };
+}
+
 /**
  * The elevation set of a scan (a triangle soup in the frame its facades, walls and symmetry are read in): four
  * elevations square to its walls (A to D) and the roof plan, constructed from what `inputs` gives, each with its
@@ -691,10 +795,12 @@ function assignMaterials(mats: MatSheet[], P: BlueprintParams): { entries: Mater
  */
 export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array; svg: string; material: Uint8Array; overlay: Uint8Array }> } {
     const t0 = Date.now();
-    const m = weld(inputs.structure ?? positions);
+    // the building alone: the street and the base's loose fill left out of the outline, the depth and the ID map
+    const shell = withoutStreet(inputs.structure ?? positions, P);
+    const m = weld(shell.soup);
     // the depth the elements and the outline are tested against: the structure with its openings closed, when given
     let depthMesh = m;
-    if (inputs.structure && inputs.structureFill && inputs.structureFill.length) { const both = new Float64Array(inputs.structure.length + inputs.structureFill.length); both.set(inputs.structure); both.set(inputs.structureFill, inputs.structure.length); depthMesh = weld(both); }
+    if (inputs.structure && inputs.structureFill && inputs.structureFill.length) { const both = new Float64Array(shell.soup.length + inputs.structureFill.length); both.set(shell.soup); both.set(inputs.structureFill, shell.soup.length); depthMesh = weld(both); }
     const azimuth = wallAzimuthDeg(m);
     let groundY = Infinity;
     for (let i = 1; i < m.P.length; i += 3) if (m.P[i] < groundY) groundY = m.P[i];
@@ -718,5 +824,5 @@ export function renderBlueprints(positions: Float32Array | Float64Array, inputs:
         for (let i = 0; i < png.W * png.H; i++) { const k = (png.rgb[3 * i] + png.rgb[3 * i + 1] + png.rgb[3 * i + 2]) / 765; for (let c = 0; c < 3; c++) overlay[3 * i + c] = Math.round(material[3 * i + c] * k); }
         return { name: views[v].name, width: png.W, height: png.H, rgb: png.rgb, svg: svgOf(png, SCHEMES[P.scheme].bg), material, overlay };
     });
-    return { report: { version: BLUEPRINT_VERSION, params: P, wallAzimuthDeg: azimuth, views: stats, materials: entries, ms: Date.now() - t0 }, pngs };
+    return { report: { version: BLUEPRINT_VERSION, params: P, wallAzimuthDeg: azimuth, streetDroppedM2: Math.round(shell.droppedM2), views: stats, materials: entries, ms: Date.now() - t0 }, pngs };
 }
