@@ -190,8 +190,17 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
 
     it('infers a second pass from its own wall photos with no model: window arrays, congruent copies, piers, round thin sections', async () => {
         const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-esb-infer-'));
-        const r = await buildMeasuredTwin({ runDir: RUN, cacheRoot: CACHE, outDir, options: { infer: true } });
+        const r = await buildMeasuredTwin({ runDir: RUN, cacheRoot: CACHE, outDir, options: { infer: true, foldScan: true } });
         const i = r.infer!;
+        // the folded scan: every wall with windows read (inside against the ring around them, on the unflattened scan),
+        // and the ESB's mesh measured as holding no bay-scale relief (its steps within a few cm of zero, almost none
+        // standing three standard errors clear)
+        const fp = r.report.piers as unknown as { revealWalls: number; revealMeasured: number; foldReads: Array<[number, number, number, number, number, number]> };
+        expect(fp.revealWalls).toBeGreaterThan(10);
+        expect(fp.foldReads.length).toBeGreaterThan(10);
+        const steps = fp.foldReads.map(f => Math.abs(f[2])).sort((a, b) => a - b);
+        expect(steps[Math.floor(steps.length / 2)]).toBeLessThan(0.03);
+        expect(fp.revealMeasured).toBeLessThan(fp.revealWalls / 4);
         // the first pass wrote each wall's photo as an orthos folder in K's frame
         const facades = JSON.parse(fs.readFileSync(path.join(outDir, 'self_orthos', 'facades.json'), 'utf8')) as { facades: Array<{ facadeId: number; image: string; width: number; height: number }> };
         expect(facades.facades.length).toBeGreaterThan(50);

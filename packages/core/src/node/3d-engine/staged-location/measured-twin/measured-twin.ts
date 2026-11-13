@@ -167,6 +167,11 @@ export function measuredTwinSpec(r: KRunRecords, out: { glb: string; report: str
     if (r.textured) L.push(`textured ${r.textured}`);
     L.push(`out ${out.glb}`, `report ${out.report}`, `ground ${Number.isNaN(r.groundY) ? 'auto' : n6(r.groundY)}`);
     if (options.kFree) L.push('param selfRead 1');
+    if (options.foldScan) {
+        L.push('param foldScan 1');
+        const raw = path.join(path.dirname(r.isolate), 'raw_clay.glb');
+        if (fs.existsSync(raw)) L.push(`rawscan ${raw}`);
+    }
     for (const l of r.loops) if (l.length >= 3) L.push(`footprint ${l.length} ${l.map(p => `${n6(p[0])} ${n6(p[1])}`).join(' ')}`);
     for (const [k, v] of Object.entries(TWIN_SCAN_PARAMS)) L.push(`scan ${k} ${v}`);
     if (options.scanDetailM !== undefined && options.scanDetailM > 0) L.push(`param scanDetailM ${n6(options.scanDetailM)}`);
@@ -249,7 +254,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
  * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
  * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer or hybrid. */ photometry?: boolean; /** The hybrid (hybrid.ts, docs/research/2026-11-08-hybrid-twin-plan.md): pipeline K's detail stages on the cut-out's own facade orthos, the twin's shell and texture built from them. */ hybrid?: boolean; /** The building's one exposure gain on the twin's colour (pipeline K's fitExposureGain on the twin's classes). Default: on with infer or hybrid; false keeps the photos' level. */ exposure?: boolean; /** Pipeline K's symmetry (symmetry.ts) on the hybrid's orthos: unread texels filled from each facade's mirror, the reader's windows confirmed or filled at mirror sites. Default on with hybrid; false off. */ symmetry?: boolean }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer or hybrid. */ photometry?: boolean; /** The hybrid (hybrid.ts, docs/research/2026-11-08-hybrid-twin-plan.md): pipeline K's detail stages on the cut-out's own facade orthos, the twin's shell and texture built from them. */ hybrid?: boolean; /** Pier steps and window reveals read from the scan before its walls were flattened (raw_clay.glb beside the cut-out), folded over every bay and window of a wall so its noise averages down; a step stands only three standard errors (each scan triangle counted once) clear of zero. Off by default: on the ESB the mesh holds no bay-scale relief (1 of 79 walls' reveals measured). */ foldScan?: boolean; /** The building's one exposure gain on the twin's colour (pipeline K's fitExposureGain on the twin's classes). Default: on with infer or hybrid; false keeps the photos' level. */ exposure?: boolean; /** Pipeline K's symmetry (symmetry.ts) on the hybrid's orthos: unread texels filled from each facade's mirror, the reader's windows confirmed or filled at mirror sites. Default on with hybrid; false off. */ symmetry?: boolean }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {

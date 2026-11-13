@@ -87,6 +87,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <set>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -191,11 +192,14 @@ struct Params {
     double pierDefaultM{0.10};         // ... by this when the scan resolves no step between pier and column (generated)
     double pierMinM{0.05};             // ... the scan's step read as the depth when at least this
     double pierMaxM{0.6};              // ... and at most this
+    int foldScan{0};                   // depths read from the scan folded over the repeats: every scan point placed by its position in the bay (pier or strip, inside a window or in the wall ring around it) and the medians compared, so the scan's noise averages down over the copies
+    double foldMinM{0.03};             // ... a folded step read as the depth when at least this
+    double foldSigma{3};               // ... and at least this many standard errors clear of the noise
     double roofDetailEdgeM{1.2};       // ... within this of a tier's outline (the parapets' band, drawn by the ledge profiles) only above 2.5 m       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
 struct Spec {
-    std::string isolate, textured, out, report;
+    std::string isolate, textured, out, report, rawScan;  // rawScan: the isolated scan before its walls were flattened (the folded depths read it)
     double groundY{0};
     std::vector<std::vector<P2>> footprintXZ;
     sp::ScanParams scan;
@@ -230,6 +234,7 @@ inline Spec parseSpec(std::istream& in) {
         std::istringstream ls(line);
         std::string k; ls >> k;
         if (k == "isolate") S.isolate = restOfLine(ls);
+        else if (k == "rawscan") S.rawScan = restOfLine(ls);
         else if (k == "textured") S.textured = restOfLine(ls);
         else if (k == "out") S.out = restOfLine(ls);
         else if (k == "report") S.report = restOfLine(ls);
@@ -269,7 +274,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "profileCoverage") P.profileCoverage = v; else if (name == "profileDensity") P.profileDensity = v;
             else if (name == "continueMinWindows") P.continueMinWindows = static_cast<int>(v); else if (name == "continueMaxDeltaE") P.continueMaxDeltaE = v;
             else if (name == "turnedBelowM") P.turnedBelowM = v;
-            else if (name == "piers") P.piers = static_cast<int>(v); else if (name == "pierDefaultM") P.pierDefaultM = v; else if (name == "pierMinM") P.pierMinM = v; else if (name == "pierMaxM") P.pierMaxM = v;
+            else if (name == "piers") P.piers = static_cast<int>(v); else if (name == "pierDefaultM") P.pierDefaultM = v; else if (name == "pierMinM") P.pierMinM = v; else if (name == "pierMaxM") P.pierMaxM = v; else if (name == "foldScan") P.foldScan = static_cast<int>(v); else if (name == "foldMinM") P.foldMinM = v; else if (name == "foldSigma") P.foldSigma = v;
             else if (name == "fillGapM") P.fillGapM = v; else if (name == "fillReachM") P.fillReachM = v; else if (name == "snapAlongM") P.snapAlongM = v; else if (name == "snapUpM") P.snapUpM = v;
             else throw std::runtime_error("unknown param " + name);
         }
@@ -587,8 +592,12 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
-    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, gateTexels{0}, gateRegions{0}, gateRefused{0}, gateSeen{0}, selfFilled{0}, slenderTexels{0}, patchFaces{0}, patchTexels{0}, patchOverflow{0};
-    std::vector<double> pierDepths;
+    size_t pierWalls{0}, pierWallsMeasured{0}, pierWallsFolded{0}, revealWalls{0}, revealWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, gateTexels{0}, gateRegions{0}, gateRefused{0}, gateSeen{0}, selfFilled{0}, slenderTexels{0}, patchFaces{0}, patchTexels{0}, patchOverflow{0};
+    std::vector<double> pierDepths, revealDepths;
+    struct FoldRead { int face, kind; double step, se; size_t nA, nB; };  // kind 1 reveal, 2 pier folded at the bay, 3 pier by the strips
+    std::vector<FoldRead> foldLog;
+    struct FoldProfile { int face; double bay, strip; std::vector<double> o; };
+    std::vector<FoldProfile> foldProfiles;
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
     size_t roofDetailPieces{0}, roofDetailBoxes{0};
@@ -698,6 +707,9 @@ inline Result build(Spec S) {
         rep.notes.push_back("street level not given: " + detail::num(S.groundY) + " (the commonest up-facing height near the scan's foot)");
     }
     sp::ScanResult R = sp::analyseScan(S.isolate, S.groundY, S.footprintXZ, {}, S.scan);
+    // the scan before its walls were flattened onto their planes: where a pier's step or a window's reveal still stands
+    std::optional<sp::ScanResult> rawR;
+    if (S.P.foldScan && !S.rawScan.empty()) { try { rawR = sp::analyseScan(S.rawScan, S.groundY, S.footprintXZ, {}, S.scan); } catch (const std::exception& e) { rep.notes.push_back(std::string("the unflattened scan could not be read (") + e.what() + "): depths read from the flattened one"); } }
     out.frame = R.frame;
     const sp::Frame& F = R.frame;
     for (const auto& n : R.notes) rep.notes.push_back(n);
@@ -1614,19 +1626,32 @@ inline Result build(Spec S) {
     struct Strip { double a0, a1, h0, h1; };
     std::vector<std::vector<Strip>> faceStrips(faces.size());
     std::vector<double> faceRecess(faces.size(), 0);
+    std::vector<double> faceReveal(faces.size(), -1);  // a wall's reveal depth read from the folded scan (foldScan), else -1: the spec's reveal
+    // a robust centre and its standard error (the median, 1.4826 MAD / sqrt n)
+    auto medSE = [](std::vector<double> v, double& se) {
+        if (v.empty()) { se = 1e9; return 0.0; }
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        const double m = v[v.size() / 2];
+        std::vector<double> d(v.size()); for (size_t i = 0; i < v.size(); ++i) d[i] = std::abs(v[i] - m);
+        std::nth_element(d.begin(), d.begin() + d.size() / 2, d.end());
+        se = 1.4826 * d[d.size() / 2] / std::sqrt(static_cast<double>(v.size()));
+        return m;
+    };
     if (S.P.piers && R.building.size()) {
         std::vector<P3> dense;
+        std::vector<uint32_t> denseTri;  // each sample's scan triangle: samples on one triangle are one measurement, not many
         {
             std::mt19937 rng(17);
             std::uniform_real_distribution<double> U(0, 1);
-            for (size_t ti = 0; ti < R.building.size(); ++ti) {
-                const P3 a = R.building.p[3 * ti], b = R.building.p[3 * ti + 1], c = R.building.p[3 * ti + 2];
+            const auto& BLD = rawR ? rawR->building : R.building;
+            for (size_t ti = 0; ti < BLD.size(); ++ti) {
+                const P3 a = BLD.p[3 * ti], b = BLD.p[3 * ti + 1], c = BLD.p[3 * ti + 2];
                 const int n = std::max(1, static_cast<int>(std::ceil(sp::len(sp::cross(b - a, c - a)) / 2 * 30)));
                 for (int k = 0; k < n; ++k) {
                     double r1 = U(rng), r2 = U(rng); if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
                     const P3 q = a + (b - a) * r1 + (c - a) * r2;
                     double x, z; F.toXZ(q.x, q.z, x, z);
-                    dense.push_back({x, q.y, z});
+                    dense.push_back({x, q.y, z}); denseTri.push_back(static_cast<uint32_t>(ti));
                 }
             }
         }
@@ -1634,6 +1659,50 @@ inline Result build(Spec S) {
         std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
         auto gkey = [&](double x, double z) { return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(x / cell)))) << 32) | static_cast<uint32_t>(static_cast<int32_t>(std::floor(z / cell))); };
         for (uint32_t i = 0; i < dense.size(); ++i) grid[gkey(dense[i].x, dense[i].z)].push_back(i);
+        // every scan sample on a wall within 1 m of its plane: (along, height, out)
+        auto facePoints = [&](size_t fi) {
+            const auto& w = faces[fi];
+            std::vector<std::array<double, 4>> pts;
+            const double minx = std::min(w.p0.x, w.p0.x + w.d.x * w.L) - 2, maxx = std::max(w.p0.x, w.p0.x + w.d.x * w.L) + 2;
+            const double minz = std::min(w.p0.z, w.p0.z + w.d.z * w.L) - 2, maxz = std::max(w.p0.z, w.p0.z + w.d.z * w.L) + 2;
+            for (double gx = std::floor(minx / cell) * cell; gx <= maxx; gx += cell) for (double gz = std::floor(minz / cell) * cell; gz <= maxz; gz += cell) {
+                auto it = grid.find(gkey(gx + 0.5 * cell, gz + 0.5 * cell));
+                if (it == grid.end()) continue;
+                for (uint32_t i : it->second) {
+                    const P3& q = dense[i];
+                    const double rx = q.x - w.p0.x, rz = q.z - w.p0.z;
+                    const double a = rx * w.d.x + rz * w.d.z, o = rx * w.n.x + rz * w.n.z;
+                    if (a < 0 || a >= w.L || q.y < S.groundY + w.h0 || q.y >= S.groundY + w.h1 || o < -1.0 || o > 1.0) continue;
+                    pts.push_back({a, q.y - S.groundY, o, static_cast<double>(denseTri[i])});
+                }
+            }
+            return pts;
+        };
+        // the reveal, folded: every scan sample inside a window (0.15 m in from its edges) against those in the wall ring
+        // around the windows (0.15 to 0.6 m out, inside no other window), over all the wall's windows at once
+        if (S.P.foldScan) for (size_t fi = 0; fi < faces.size(); ++fi) {
+            const auto& wins = faceWins[fi];
+            if (wins.size() < 6) continue;
+            ++rep.revealWalls;
+            const auto pts = facePoints(fi);
+            std::vector<double> in, ring; std::set<uint32_t> tIn, tRing;
+            for (const auto& q : pts) {
+                bool inside = false, nearWin = false, inRing = false;
+                for (const auto& W : wins) {
+                    const auto& r = W.r;
+                    if (q[0] > r.a0 + 0.15 && q[0] < r.a1 - 0.15 && q[1] > r.h0 + 0.15 && q[1] < r.h1 - 0.15) inside = true;
+                    if (q[0] > r.a0 - 0.15 && q[0] < r.a1 + 0.15 && q[1] > r.h0 - 0.15 && q[1] < r.h1 + 0.15) nearWin = true;
+                    if (q[0] > r.a0 - 0.6 && q[0] < r.a1 + 0.6 && q[1] > r.h0 - 0.6 && q[1] < r.h1 + 0.6) inRing = true;
+                }
+                if (inside) { in.push_back(q[2]); tIn.insert(static_cast<uint32_t>(q[3])); } else if (!nearWin && inRing) { ring.push_back(q[2]); tRing.insert(static_cast<uint32_t>(q[3])); }
+            }
+            if (in.size() < 40 || ring.size() < 40) continue;
+            double seI, seR;
+            const double mi = medSE(in, seI), mr = medSE(ring, seR), step = mr - mi;
+            seI *= std::sqrt(static_cast<double>(in.size()) / std::max<size_t>(1, tIn.size())); seR *= std::sqrt(static_cast<double>(ring.size()) / std::max<size_t>(1, tRing.size()));
+            rep.foldLog.push_back({static_cast<int>(fi), 1, step, std::sqrt(seI * seI + seR * seR), in.size(), ring.size()});
+            if (step >= S.P.foldMinM && step <= S.P.pierMaxM && step >= S.P.foldSigma * std::sqrt(seI * seI + seR * seR)) { faceReveal[fi] = step; ++rep.revealWallsMeasured; rep.revealDepths.push_back(step); }
+        }
         for (size_t fi = 0; fi < faces.size(); ++fi) {
             const auto& w = faces[fi];
             std::map<std::pair<long, long>, Strip> cols;
@@ -1688,15 +1757,58 @@ inline Result build(Spec S) {
                 const double step = med(pierO) - med(stripO);
                 if (step >= S.P.pierMinM && step <= S.P.pierMaxM) { Ds = step; measured = true; }
             }
+            // the step folded over the bays: every scan sample on the strips' heights placed by its phase in the bay (the
+            // strips' spacing, when regular, else by the strips themselves), all the piers' samples against all the strips'
+            if (S.P.foldScan && !measured) {
+                const auto pts = facePoints(fi);
+                std::vector<double> gaps; for (size_t k = 1; k < kept.size(); ++k) gaps.push_back(kept[k].a0 - kept[k - 1].a0);
+                double bp = 0, sw = 0;
+                if (gaps.size() >= 2) {
+                    auto g = gaps; std::nth_element(g.begin(), g.begin() + g.size() / 2, g.end()); bp = g[g.size() / 2];
+                    double var = 0; for (double x : gaps) var += (x - bp) * (x - bp);
+                    if (std::sqrt(var / gaps.size()) > 0.15 * bp) bp = 0;
+                    std::vector<double> ws; for (const auto& c : kept) ws.push_back(c.a1 - c.a0);
+                    std::nth_element(ws.begin(), ws.begin() + ws.size() / 2, ws.end()); sw = ws[ws.size() / 2];
+                    if (sw >= bp - 2 * C) bp = 0;
+                }
+                std::vector<double> pO, sO; std::set<uint32_t> tP, tS;
+                for (const auto& q : pts) {
+                    if (q[1] < lo || q[1] > hi || q[0] < kept.front().a0 - (bp > 0 ? bp : 0) || q[0] > kept.back().a1 + (bp > 0 ? bp : 0)) continue;
+                    if (bp > 0) {
+                        double ph = std::fmod(q[0] - kept.front().a0, bp); if (ph < 0) ph += bp;
+                        if (ph > C && ph < sw - C) { sO.push_back(q[2]); tS.insert(static_cast<uint32_t>(q[3])); } else if (ph > sw + C && ph < bp - C) { pO.push_back(q[2]); tP.insert(static_cast<uint32_t>(q[3])); }
+                    } else {
+                        bool inS = false, edge = false;
+                        for (const auto& c : kept) { if (q[0] > c.a0 + C && q[0] < c.a1 - C) inS = true; if (std::abs(q[0] - c.a0) < C || std::abs(q[0] - c.a1) < C) edge = true; }
+                        if (edge || q[0] < kept.front().a0 || q[0] > kept.back().a1) continue;
+                        (inS ? sO : pO).push_back(q[2]); (inS ? tS : tP).insert(static_cast<uint32_t>(q[3]));
+                    }
+                }
+                if (bp > 0) {
+                    // the depth across the whole bay, in 20 phase bins (a step at another phase would mean the bays are misplaced)
+                    std::vector<std::vector<double>> bins(20);
+                    for (const auto& q : pts) { if (q[1] < lo || q[1] > hi) continue; double ph = std::fmod(q[0] - kept.front().a0, bp); if (ph < 0) ph += bp; bins[std::min(19, static_cast<int>(ph / bp * 20))].push_back(q[2]); }
+                    std::vector<double> prof; for (auto& b : bins) { double se; prof.push_back(b.size() >= 20 ? medSE(b, se) : NAN); }
+                    rep.foldProfiles.push_back({static_cast<int>(fi), bp, sw, prof});
+                }
+                if (pO.size() >= 40 && sO.size() >= 40) {
+                    double seP, seS;
+                    const double mp = medSE(pO, seP), ms = medSE(sO, seS), step = mp - ms;
+                    seP *= std::sqrt(static_cast<double>(pO.size()) / std::max<size_t>(1, tP.size())); seS *= std::sqrt(static_cast<double>(sO.size()) / std::max<size_t>(1, tS.size()));
+                    rep.foldLog.push_back({static_cast<int>(fi), bp > 0 ? 2 : 3, step, std::sqrt(seP * seP + seS * seS), pO.size(), sO.size()});
+                    if (step >= S.P.foldMinM && step <= S.P.pierMaxM && step >= S.P.foldSigma * std::sqrt(seP * seP + seS * seS)) { Ds = step; measured = true; ++rep.pierWallsFolded; }
+                }
+            }
             faceStrips[fi] = kept; faceRecess[fi] = Ds;
             ++rep.pierWalls; if (measured) ++rep.pierWallsMeasured; rep.pierStrips += kept.size(); rep.pierDepths.push_back(Ds);
         }
     }
 
     // --- emit walls (cells), windows (reveals, panes, frames)
-    const double D = S.revealM;
+    const double D0 = S.revealM;
     for (size_t fi = 0; fi < faces.size(); ++fi) {
         const auto& w = faces[fi];
+        const double D = faceReveal[fi] > 0 ? faceReveal[fi] : D0;  // the folded scan's reveal (measured), else the spec's
         auto at = [&](double a, double h, double off) { return P3{w.p0.x + w.d.x * a - w.n.x * off, S.groundY + h, w.p0.z + w.d.z * a - w.n.z * off}; };
         FaceTex* T = faceTex[fi].ok ? &faceTex[fi] : nullptr;
         FaceTex* B = faceTex[NF + fi].ok ? &faceTex[NF + fi] : nullptr;
@@ -3181,7 +3293,7 @@ inline Result build(Spec S) {
 
     const std::string colourSrc = ph.ok ? "photo-inferred: the per-channel median of the scan's own photo texture over each element" : "the nearest appearance class's measured colour (no photo sampled)";
     massing.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"tiers of the tree-free scan's height map (mean-shift levels, squared outlines), each a prism with a flat cap\",\"colour\":\"" + detail::esc(colourSrc) + "\",\"material\":\"photo-inferred: the nearest of pipeline K's measured appearance classes, its library set's maps at real size\"}}";
-    openings.extras = "{\"sb\":{\"provenance\":\"photo-inferred\",\"method\":\"pipeline K's kept window boxes (facade reader, else window fit) mapped onto the prism walls, punched and recessed\",\"depthM\":" + detail::num(D) + ",\"depthProvenance\":\"" + detail::esc(S.revealLabel) + "\",\"depthSource\":\"" + detail::esc(S.revealSource) + "\",\"generatedWindows\":" + std::to_string(rep.windowsGenerated) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
+    openings.extras = "{\"sb\":{\"provenance\":\"photo-inferred\",\"method\":\"pipeline K's kept window boxes (facade reader, else window fit) mapped onto the prism walls, punched and recessed\",\"depthM\":" + detail::num(D0) + ",\"depthProvenance\":\"" + detail::esc(S.revealLabel) + "\",\"depthSource\":\"" + detail::esc(S.revealSource) + "\",\"foldedWalls\":" + std::to_string(rep.revealWallsMeasured) + ",\"foldedNote\":\"walls whose reveal the scan measured when folded over all their windows (inside against the ring around them) take that depth (measured); the rest the depth above\",\"generatedWindows\":" + std::to_string(rep.windowsGenerated) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     slender.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"one axis from per-slice circle fits; 95th-percentile sector radii per slice, harmonic smoothing, averaged over the measured order of rotational symmetry; tapered steps by penalised least-squares segmentation of the radius\",\"symmetry\":" + std::to_string(rep.slenderSymmetry) + ",\"fromM\":" + detail::num(slenderH) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     ledges.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"each tier wall's scan sections stacked along it into one profile (outermost surface per 0.1 m of height), its continuous steps and parapet swept along the wall, mitred at the corners\",\"walls\":" + std::to_string(rep.profileWalls) + ",\"lips\":" + std::to_string(rep.profileLips) + ",\"parapets\":" + std::to_string(rep.profileParapets) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     roofDet.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"the scan's height map against the twin's tiers: connected cells standing above the twin's roof, rebuilt as blocks at the scan's heights in 0.5 m steps (maximal rectangles per height)\",\"pieces\":" + std::to_string(rep.roofDetailPieces) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
@@ -3324,7 +3436,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"
-      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"gate\":{\"texels\":" << r.gateTexels << ",\"regions\":" << r.gateRegions << ",\"refused\":" << r.gateRefused << ",\"seen\":" << r.gateSeen << "}" << ",\"selfFilled\":" << r.selfFilled << ",\"slenderTexels\":" << r.slenderTexels << ",\"patchFaces\":" << r.patchFaces << ",\"patchTexels\":" << r.patchTexels << ",\"patchOverflow\":" << r.patchOverflow << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
+      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"folded\":" << r.pierWallsFolded << ",\"foldProfiles\":[" << [&] { std::string o; for (size_t i = 0; i < r.foldProfiles.size(); ++i) { const auto& f = r.foldProfiles[i]; o += (i ? "," : "") + std::string("{\"face\":") + std::to_string(f.face) + ",\"bay\":" + detail::num(f.bay) + ",\"strip\":" + detail::num(f.strip) + ",\"o\":["; for (size_t k = 0; k < f.o.size(); ++k) o += (k ? "," : "") + (std::isnan(f.o[k]) ? std::string("null") : detail::num(f.o[k])); o += "]}"; } return o; }() << "]" << ",\"foldReads\":[" << [&] { std::string o; for (size_t i = 0; i < r.foldLog.size(); ++i) { const auto& f = r.foldLog[i]; o += (i ? "," : "") + std::string("[") + std::to_string(f.face) + "," + std::to_string(f.kind) + "," + detail::num(f.step) + "," + detail::num(f.se) + "," + std::to_string(f.nA) + "," + std::to_string(f.nB) + "]"; } return o; }() << "]" << ",\"revealWalls\":" << r.revealWalls << ",\"revealMeasured\":" << r.revealWallsMeasured << ",\"revealMedianM\":" << detail::num([&] { auto v = r.revealDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"gate\":{\"texels\":" << r.gateTexels << ",\"regions\":" << r.gateRegions << ",\"refused\":" << r.gateRefused << ",\"seen\":" << r.gateSeen << "}" << ",\"selfFilled\":" << r.selfFilled << ",\"slenderTexels\":" << r.slenderTexels << ",\"patchFaces\":" << r.patchFaces << ",\"patchTexels\":" << r.patchTexels << ",\"patchOverflow\":" << r.patchOverflow << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";

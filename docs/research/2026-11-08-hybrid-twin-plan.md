@@ -80,3 +80,22 @@ All model answers are kept in the readings store by their inputs, so a rebuild c
   step are there for that; measured per wall.
 - Kept scan at ornament cells must meet the twin's walls without gaps: the twin's shell distance test already places it.
 - MAIN judges integration (class 1/2/3) from the real-data evidence; nothing here changes K or its defaults.
+
+## Finding, 2026-11-12: the scan holds no bay-scale relief at the ESB (folding cannot recover it)
+
+Tried: pier steps and window reveals read from the scan folded over every bay and window of a wall (`foldScan`,
+`scratchbox_measured_twin.hpp`), on the cut-out before tile_refine flattened its walls (`raw_clay.glb`), so that the
+scan's noise would average down over the copies.
+
+- The depth across a whole bay, in 20 phase bins, is flat on every wall with a regular bay: within 1.6-7.9 cm of a
+  constant (no step at the strips or anywhere else), so the bays are not misplaced; the mesh has no relief there.
+- Per wall the folded step is 0.0 cm median (reveals; 80% within +/-2 cm) and 0.1-0.3 cm (piers), with a standard error
+  of about 5.5 mm once each scan triangle counts once (samples on one triangle are one measurement): 1 of 79 walls'
+  reveals and none of 37 walls' pier steps stand three standard errors clear.
+- Why: the ESB's whole cut-out is 48,744 triangles, about 2 m^2 each. Averaging removes noise, not resolution the mesh
+  never had.
+
+So geometric detail below about 0.5 m at the ESB has to come from another source: Street View with Depth Anything V2
+Small at street level (allowed), or, with a decision under AGENTS.md section 2, cast-shadow widths under the fitted sun,
+shading over the folded photo, or stereo between registered panos. `foldScan` stays opt-in for meshes that do resolve
+their bays.
