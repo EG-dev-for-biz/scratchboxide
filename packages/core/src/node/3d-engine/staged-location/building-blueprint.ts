@@ -25,13 +25,18 @@
  *    site no window touches drawn dashed (generated), and the building's plan mirrors as centre lines.
  *  - levels: the heights where horizontal outline runs across levelShare of the width, each with a datum mark and its
  *    height above the lowest point. Measured.
+ *  - detail: with the textured scan, the photo's strongest edges as the lightest hairlines under everything (the
+ *    ornament, frames and texture no reading holds). Photo-inferred.
+ * Where several facade readings cover one stretch of wall, each window and bay is drawn once: facades nearest the viewer
+ * first, then those with the most windows, and an element landing mostly on one already drawn is skipped.
  * Line weights follow the hierarchy an architect draws with: the silhouette heaviest, the structure (bays, ledges)
  * medium, the openings fine, the panes and spandrels finest. The legend says which line comes from where.
  */
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import { drawText } from './photo-match-eval';
-import { CARDINAL_VIEWS, classifyEdges, FACING_EPS, turned, wallAzimuthDeg, weld, type LineDrawingView, type Mesh, type PlaneOrthoFrame } from './building-line-drawing';
+import { CARDINAL_VIEWS, classifyEdges, FACING_EPS, LINE_DRAWING_PARAMS, photoEdges, turned, wallAzimuthDeg, weld, type LineDrawingView, type Mesh, type PlaneOrthoFrame } from './building-line-drawing';
+import type { TileTriangles } from './tile-texture-transfer';
 import type { SymmetryReport } from './pipeline-k/symmetry';
 
 type Rect = [number, number, number, number];
@@ -46,6 +51,8 @@ export interface BlueprintInputs {
     facades?: BlueprintFacade[];
     walls?: BlueprintWall[];
     symmetry?: SymmetryReport;
+    /** The textured scan: its photo's strongest edges drawn as the lightest layer, under the constructed lines (detail the readings do not hold: ornament, frames, texture). Photo-inferred. */
+    photo?: TileTriangles;
     title?: string;
     note?: string;
 }
@@ -81,12 +88,14 @@ export interface BlueprintReport {
     views: Array<{
         name: string; label: string; width: number; height: number; pixelM: number; originU: number; originV: number; right: Vec3; up: Vec3; forward: Vec3;
         outlineEdges: number; ledges: number; walls: number; bays: number; facades: number; windows: number; panes: number; sills: number; spandrels: number;
+        /** Windows and bays not drawn because another facade's reading had already drawn one on the same spot. */
+        duplicatesSkipped: number; photoEdgePixels: number;
         mirroredWindows: number; facadeAxes: number; planAxes: number; levels: number[]; extentM: [number, number];
     }>;
     ms: number;
 }
 
-export const BLUEPRINT_VERSION = 'building-blueprint/2';
+export const BLUEPRINT_VERSION = 'building-blueprint/3';
 
 const SCHEMES = { ink: { bg: [255, 255, 255] as Vec3, ink: [16, 16, 16] as Vec3 }, blueprint: { bg: [24, 60, 116] as Vec3, ink: [236, 243, 255] as Vec3 } };
 
@@ -159,7 +168,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     const ts = Math.max(1, Math.min(3, Math.round(Math.min(W, H * 0.6) / 700)));
     // weights: the silhouette heaviest (a 3 px brush), everything else one pixel, told apart by its tone (alpha)
     const heavy = 1, medium = 0;
-    const TONE = { structure: 1, opening: 0.85, fine: 0.5 };
+    const TONE = { structure: 1, opening: 0.85, fine: 0.5, photo: 0.22 };
     const depth = depthBuffer(m, view, dw, dh, col, row);
     const visibleAt = (uu: number, vv: number, dd: number, eps: number) => { const x = Math.round(col(uu)), y = Math.round(row(vv)); if (x < 0 || y < 0 || x >= dw || y >= dh) return false; let best = Infinity; for (let k = -1; k <= 1; k++) for (let j = -1; j <= 1; j++) { const xx = x + j, yy = y + k; if (xx >= 0 && yy >= 0 && xx < dw && yy < dh) best = Math.min(best, depth[yy * dw + xx]); } return dd <= best + eps; };
     // an inferred element (a bay, a window) lies on the surface the viewer sees: within eps of it, in front or behind (never over empty background)
@@ -174,6 +183,27 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     }
     for (let k = 0; k <= 1; k++) { line(sheet, 12 + k, 12 + k, W - 13 - k, 12 + k, 0.9); line(sheet, 12 + k, H - 13 - k, W - 13 - k, H - 13 - k, 0.9); line(sheet, 12 + k, 12 + k, 12 + k, H - 13 - k, 0.9); line(sheet, W - 13 - k, 12 + k, W - 13 - k, H - 13 - k, 0.9); }
 
+    // 0. the photo's detail, lightest and under everything
+    let photoEdgePixels = 0;
+    if (inputs.photo && !isPlan) {
+        const pe = photoEdges(inputs.photo, view, dw, dh, col, row, LINE_DRAWING_PARAMS);
+        for (let i = 0; i < dw * dh; i++) if (pe.edge[i]) { ink(sheet, M + (i % dw), M + Math.floor(i / dw), TONE.photo); photoEdgePixels++; }
+    }
+    // what is already drawn, in sheet pixels: a later element landing mostly (share) on one of the same kind is a duplicate
+    const CELL = 32, claims = new Map<string, Map<number, number[][]>>();
+    const boxOf = (q: Vec3[]) => { const xs = q.map(p => X(dot(p, right))), ys = q.map(p => Y(dot(p, up))); return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+    const taken = (kind: string, b: number[], share: number) => {
+        const grid = claims.get(kind); if (!grid) return false;
+        const area = Math.max(1, (b[2] - b[0]) * (b[3] - b[1]));
+        for (let gy = Math.floor(b[1] / CELL); gy <= Math.floor(b[3] / CELL); gy++) for (let gx = Math.floor(b[0] / CELL); gx <= Math.floor(b[2] / CELL); gx++) for (const o of grid.get(gy * 100000 + gx) ?? []) {
+            const ix = Math.max(0, Math.min(b[2], o[2]) - Math.max(b[0], o[0])), iy = Math.max(0, Math.min(b[3], o[3]) - Math.max(b[1], o[1]));
+            if (ix * iy >= share * Math.min(area, Math.max(1, (o[2] - o[0]) * (o[3] - o[1])))) return true;
+        }
+        return false;
+    };
+    const claim = (kind: string, b: number[]) => { const grid = claims.get(kind) ?? claims.set(kind, new Map()).get(kind)!; for (let gy = Math.floor(b[1] / CELL); gy <= Math.floor(b[3] / CELL); gy++) for (let gx = Math.floor(b[0] / CELL); gx <= Math.floor(b[2] / CELL); gx++) { const k = gy * 100000 + gx; (grid.get(k) ?? grid.set(k, []).get(k)!).push(b); } };
+    let duplicatesSkipped = 0;
+
     // 1. structure: each facing wall's recessed bays, a panel with its reveal (the piers stand between them)
     const cosFacing = Math.cos((P.facingDeg * Math.PI) / 180);
     let walls = 0, bays = 0;
@@ -183,7 +213,10 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         let any = false;
         for (const b of w.bays) {
             if (!seen(at((b.u0 + b.u1) / 2, (b.y0 + b.y1) / 2))) continue;
-            quad([at(b.u0, b.y0), at(b.u1, b.y0), at(b.u1, b.y1), at(b.u0, b.y1)], TONE.structure, medium);
+            const bq = [at(b.u0, b.y0), at(b.u1, b.y0), at(b.u1, b.y1), at(b.u0, b.y1)], bb = boxOf(bq);
+            if (taken('bay', bb, 0.5)) { duplicatesSkipped++; continue; }
+            claim('bay', bb);
+            quad(bq, TONE.structure, medium);
             const r = Math.min(P.revealM, (b.u1 - b.u0) / 4);
             quad([at(b.u0 + r, b.y0), at(b.u1 - r, b.y0), at(b.u1 - r, b.y1 - r), at(b.u0 + r, b.y1 - r)], TONE.fine, 0);
             bays++; any = true;
@@ -194,7 +227,9 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     // 2. openings: each facing facade's windows with their frames, mullions (its panes), sills and the spandrels between
     let facadesDrawn = 0, windows = 0, panes = 0, sills = 0, spandrels = 0, mirrored = 0, facadeAxes = 0;
     const readingOf = (id: number) => inputs.symmetry?.facades.find(f => f.facadeId === id);
-    if (!isPlan) for (const fc of inputs.facades ?? []) {
+    // nearest the viewer first, then the most windows: the reading that is seen is the one drawn
+    const ordered = [...(inputs.facades ?? [])].sort((a, b) => dot(a.frame.centroid, forward) - dot(b.frame.centroid, forward) || b.rects.length - a.rects.length);
+    if (!isPlan) for (const fc of ordered) {
         const f = fc.frame;
         if (-dot(f.normal, forward) < cosFacing) continue;
         const world = (s: number, t: number): Vec3 => [f.centroid[0] + s * f.axisS[0] + t * f.axisT[0], f.centroid[1] + s * f.axisS[1] + t * f.axisT[1], f.centroid[2] + s * f.axisS[2] + t * f.axisT[2]];
@@ -203,15 +238,25 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         const visibleRect = (r: number[]) => { const g = rectWorld(r); return seen(world((g.s0 + g.s1) / 2, (g.t0 + g.t1) / 2)) ? g : undefined; };
         let any = false;
         const drawn: Array<{ s0: number; s1: number; t0: number; t1: number }> = [];
+        const mine: number[][] = [];
         for (const r of fc.rects) {
             const g = visibleRect(r);
             if (!g) continue;
+            const wb = boxOf(g.q);
+            if (taken('window', wb, 0.3)) { duplicatesSkipped++; continue; }
+            claim('window', wb); mine.push(wb);
             quad(g.q, TONE.opening, 0);
             line(sheet, X(dot(world(g.s0 - P.sillM, g.t0), right)), Y(dot(world(g.s0 - P.sillM, g.t0), up)), X(dot(world(g.s1 + P.sillM, g.t0), right)), Y(dot(world(g.s1 + P.sillM, g.t0), up)), TONE.opening, 0);
             windows++; sills++; any = true; drawn.push(g);
         }
         // the mullions: the reading's panes inside each window
-        for (const p of fc.panes ?? []) { const g = visibleRect(p); if (!g) continue; quad(g.q, TONE.fine, 0); panes++; }
+        for (const p of fc.panes ?? []) {
+            const g = visibleRect(p); if (!g) continue;
+            // only inside a window this facade drew (a duplicate's panes go with it)
+            const pb = boxOf(g.q), pa = Math.max(1, (pb[2] - pb[0]) * (pb[3] - pb[1]));
+            if (!mine.some(o => Math.max(0, Math.min(pb[2], o[2]) - Math.max(pb[0], o[0])) * Math.max(0, Math.min(pb[3], o[3]) - Math.max(pb[1], o[1])) >= 0.6 * pa)) continue;
+            quad(g.q, TONE.fine, 0); panes++;
+        }
         // the spandrels: between two windows of one column (overlapping in s by half) with a gap of spandrelMinM..spandrelMaxM
         const byCol = [...drawn].sort((a, b) => a.s0 - b.s0 || b.t1 - a.t1);
         for (let i = 0; i < byCol.length; i++) {
@@ -240,6 +285,9 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
                 if (mr[0] < 0 || mr[2] > f.width || fc.rects.some(o => iou(o, mr) > 0)) continue;
                 const g = visibleRect(mr);
                 if (!g) continue;
+                const mb = boxOf(g.q);
+                if (taken('window', mb, 0.1)) continue;
+                claim('window', mb);
                 quad(g.q, 0.6, 0, [4, 3]);
                 mirrored++; any = true;
             }
@@ -333,14 +381,14 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         `${(inputs.title ?? 'BUILDING').toUpperCase()}  -  ${label}`,
         `1 PX = ${pixelM.toFixed(3)} M. VIEWS SQUARE TO THE WALLS (${azimuth.toFixed(1)} DEG). LEVELS IN METRES ABOVE THE LOWEST POINT.${inputs.note ? ` ${inputs.note.toUpperCase()}` : ''}`,
         'HEAVY: SILHOUETTE. FULL TONE: CREASES, LEDGES (DOUBLED) AND RECESSED BAYS. LIGHTER: WINDOWS AND SILLS. LIGHTEST: REVEALS, MULLIONS, SPANDREL PANELS.',
-        'OUTLINE AND LEVELS MEASURED FROM THE SCAN. BAYS, WINDOWS, PANES AND SPANDRELS INFERRED FROM THE FACADE PHOTOS (PHOTO-INFERRED). DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY.'
+        'OUTLINE AND LEVELS MEASURED FROM THE SCAN. BAYS, WINDOWS, PANES AND SPANDRELS INFERRED FROM THE FACADE PHOTOS, AND THE FAINT HAIRLINES TRACED FROM THEM (PHOTO-INFERRED). DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY.'
     ];
     const small = Math.max(1, ts - 1), chars = Math.floor((tbW - 20) / (6 * small));
     text(sheet, tbX + 10, tbY + 6, wrapTo(rows[0], Math.floor((tbW - 20) / (6 * ts)))[0], ts);
     rows.slice(1).flatMap(r => wrapTo(r, chars)).slice(0, Math.floor((tbH - 14 * ts - 16) / (10 * small))).forEach((r, i) => text(sheet, tbX + 10, tbY + 14 * ts + 12 + i * 10 * small, r, small));
     return {
         png: sheet,
-        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10] }
+        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, duplicatesSkipped, photoEdgePixels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10] }
     };
 }
 

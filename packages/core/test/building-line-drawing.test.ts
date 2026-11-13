@@ -175,6 +175,10 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         expect(ac.spandrels).toBeGreaterThan(1000);
         expect(ac.panes).toBeGreaterThan(1000);
         expect(ac.ledges).toBeGreaterThan(50);
+        // overlapping facade readings drawn once (the shaft's): duplicates left out; the photo's detail as hairlines
+        const dup = rep.views[2] as unknown as { duplicatesSkipped: number; photoEdgePixels: number };
+        expect(dup.duplicatesSkipped).toBeGreaterThan(100);
+        expect(dup.photoEdgePixels).toBeGreaterThan(10_000);
         // the setback over the podium (about 107 m) and the top of the shaft's crown (about 334 m) are among its levels
         expect(c.levels.some(l => Math.abs(l - 107) < 3)).toBe(true);
         expect(c.levels.some(l => Math.abs(l - 334) < 3)).toBe(true);

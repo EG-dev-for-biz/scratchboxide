@@ -180,7 +180,7 @@ function put(c: Canvas, x: number, y: number, a: number): void {
  * depth test (bilinear texels, perceptual lightness so shade does not hide an edge), its Sobel gradient, and the pixels
  * that pass the quantile and are a local maximum across the gradient. Returns the edge mask and its counts.
  */
-function photoEdges(photo: TileTriangles, view: LineDrawingView, W: number, H: number, col: (u: number) => number, row: (v: number) => number, P: LineDrawingParams): { edge: Uint8Array; covered: number; edgePixels: number; threshold: number } {
+export function photoEdges(photo: TileTriangles, view: LineDrawingView, W: number, H: number, col: (u: number) => number, row: (v: number) => number, P: LineDrawingParams): { edge: Uint8Array; covered: number; edgePixels: number; threshold: number } {
     const { forward, right, up } = view;
     const N = W * H, depth = new Float32Array(N).fill(Infinity), lum = new Float32Array(N).fill(NaN);
     const nTri = photo.positions.length / 9, rgb = new Float64Array(3);
