@@ -8,24 +8,25 @@
  ********************************************************************************/
 
 /**
- * A staged building drawn as an architect's blueprint: white line work on blueprint blue, four elevations square to its
- * walls and a roof plan, each with a grid, its levels, overall dimensions, a scale bar and a title block. Built from what
- * the pipeline reads, not from a photo's edges:
+ * A staged building drawn as an architect's elevation set: four elevations square to its walls and a roof plan, black
+ * line work on white (or white on blueprint blue), each with its levels, overall dimensions, a scale bar and a title
+ * block. Constructed from what the pipeline infers about the building, not traced from a photo:
  *
- *  - the outline: the scan's silhouette and crease edges (building-line-drawing.ts), hidden lines removed, only those
- *    running along the view's axes (within axisDeg): a wall, a setback, a ledge or a pier side runs along them, a fold
- *    between the scan's large triangles runs any way. Measured.
- *  - the windows: each facade's windows as pipeline K read them (window_fit.json: the facade reader's openings and the
- *    window arrays, in each straightened photo's pixels), each a crisp rectangle mapped through its facade's frame onto the
- *    elevation that faces it, drawn where the facade is the surface the viewer sees. Photo-inferred.
- *  - symmetry (pipeline-k/symmetry.ts): each facade's own mirror axis (a facade whose photo matches its mirror at
- *    mirrorNcc or more, and does not merely repeat) drawn as a centre line, and every window mirrored about it into a site
- *    no window touches drawn dashed (generated: inferred from the symmetry); the building's plan mirrors
- *    (scoring planMirrorScore or more) drawn as centre lines on the elevations that see them edge on and across the plan.
- *  - levels: the heights where horizontal outline edges run across levelShare of the elevation's width or more (the
- *    setbacks and parapets; levels within levelMergeM of each other one), each a dashed line labelled with its height
- *    above the scan's lowest point. Measured.
- * The legend says which line is which and where it comes from.
+ *  - structure: each wall's recessed bays as pipeline K's wall grammar read them (wall_grammar.json: bays per wall in its
+ *    own frame, the tiers' bay rhythm), each drawn as a recessed panel with its reveal; the piers stand between them.
+ *    Photo-inferred (where the grammar laid them by its rhythm: generated, as it labels them).
+ *  - openings: each facade's windows (window_fit.json: the facade reader's openings and the window arrays), each with its
+ *    frame, its mullions where the reading split it into panes, and its sill; between two windows stacked in one column,
+ *    the spandrel as a panel. Photo-inferred.
+ *  - the outline: the scan's silhouettes and creases along the view's axes (building-line-drawing.ts), hidden lines
+ *    removed; where it runs horizontal for 2 m or more it is drawn doubled, as the ledge or cornice band it is (the scan
+ *    measures the step, not the band's depth: the second line is drawn ledgeM below). Measured.
+ *  - symmetry (pipeline-k/symmetry.ts): each facade's mirror axis as a centre line, a window mirrored about it into a
+ *    site no window touches drawn dashed (generated), and the building's plan mirrors as centre lines.
+ *  - levels: the heights where horizontal outline runs across levelShare of the width, each with a datum mark and its
+ *    height above the lowest point. Measured.
+ * Line weights follow the hierarchy an architect draws with: the silhouette heaviest, the structure (bays, ledges)
+ * medium, the openings fine, the panes and spandrels finest. The legend says which line comes from where.
  */
 
 import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
@@ -33,15 +34,19 @@ import { drawText } from './photo-match-eval';
 import { CARDINAL_VIEWS, classifyEdges, FACING_EPS, turned, wallAzimuthDeg, weld, type LineDrawingView, type Mesh, type PlaneOrthoFrame } from './building-line-drawing';
 import type { SymmetryReport } from './pipeline-k/symmetry';
 
-/** One facade's windows as pipeline K read them, in its straightened photo's pixels ([x0, y0, x1, y1], y down from its top). */
-export interface BlueprintFacade { facadeId: number; frame: PlaneOrthoFrame & { tMin?: number; tMax?: number }; rects: Array<[number, number, number, number]> }
+type Rect = [number, number, number, number];
+
+/** One facade's windows and panes as pipeline K read them, in its straightened photo's pixels ([x0, y0, x1, y1], y down from its top). */
+export interface BlueprintFacade { facadeId: number; frame: PlaneOrthoFrame & { tMin?: number; tMax?: number }; rects: Rect[]; panes?: Rect[] }
+
+/** One wall's recessed bays as the wall grammar read them: the wall's plane (normal, offset along it), its horizontal axis, and each bay's span along it (u, m) and height (y, world m). */
+export interface BlueprintWall { wallId: number; normal: Vec3; axisU: Vec3; offset: number; bays: Array<{ u0: number; u1: number; y0: number; y1: number; from?: string }> }
 
 export interface BlueprintInputs {
     facades?: BlueprintFacade[];
+    walls?: BlueprintWall[];
     symmetry?: SymmetryReport;
-    /** The title block's first line (the building's name or address). */
     title?: string;
-    /** A date or run id for the title block. */
     note?: string;
 }
 
@@ -49,18 +54,24 @@ export const BLUEPRINT_PARAMS = {
     pixelM: 0.1, maxDimPx: 4096, creaseDeg: 25, minEdgeLenM: 0.3, depthEpsM: 0.08,
     /** Outline edges kept within this angle (degrees) of the view's axes. */
     axisDeg: 3,
-    /** A facade faces a view when its normal is within this angle (degrees) of the view's back direction. */
+    /** A facade or wall faces a view when its normal is within this angle (degrees) of the view's back direction. */
     facingDeg: 25,
-    /** A window is drawn when its centre stands at most this far behind the surface the viewer sees there (the facade's frame is its fitted plane, the scan around it). */
+    /** An element is drawn when it stands at most this far behind the surface the viewer sees there. */
     windowDepthM: 1.5,
     /** A facade's mirror axis is drawn (and its windows mirrored) when its photo matches its mirror at this NCC or more. */
     mirrorNcc: 0.75,
-    /** A plan mirror is drawn when it scores this or more; on an elevation, when its plane is within planMirrorDeg of the view direction. */
     planMirrorScore: 0.9, planMirrorDeg: 5,
-    /** A level is a height where horizontal outline runs across this share of the elevation's width or more. */
-    levelShare: 0.35, levelBinM: 0.5,
-    /** Levels nearer each other than this (m) are one: the higher kept. */
-    levelMergeM: 3,
+    levelShare: 0.35, levelBinM: 0.5, levelMergeM: 3,
+    /** A bay's reveal: its inner line this far inside its outline (m). */
+    revealM: 0.25,
+    /** A sill runs this far past its window on each side (m). */
+    sillM: 0.15,
+    /** Two windows in one column with a gap of spandrelMinM to spandrelMaxM (m) between them have a spandrel panel there, inset spandrelInsetM. */
+    spandrelMinM: 0.4, spandrelMaxM: 3, spandrelInsetM: 0.15,
+    /** A horizontal outline run of ledgeMinM or more is drawn doubled, its second line ledgeM below. */
+    ledgeMinM: 2, ledgeM: 0.35,
+    /** 'ink': black on white; 'blueprint': white on blue. */
+    scheme: 'ink' as 'ink' | 'blueprint',
     gridM: 10, marginPx: 150, titlePx: 170
 };
 export type BlueprintParams = typeof BLUEPRINT_PARAMS;
@@ -69,26 +80,26 @@ export interface BlueprintReport {
     version: string; params: BlueprintParams; wallAzimuthDeg: number;
     views: Array<{
         name: string; label: string; width: number; height: number; pixelM: number; originU: number; originV: number; right: Vec3; up: Vec3; forward: Vec3;
-        outlineEdges: number; facades: number; windows: number; mirroredWindows: number; facadeAxes: number; planAxes: number;
-        levels: number[]; extentM: [number, number];
+        outlineEdges: number; ledges: number; walls: number; bays: number; facades: number; windows: number; panes: number; sills: number; spandrels: number;
+        mirroredWindows: number; facadeAxes: number; planAxes: number; levels: number[]; extentM: [number, number];
     }>;
     ms: number;
 }
 
-export const BLUEPRINT_VERSION = 'building-blueprint/1';
+export const BLUEPRINT_VERSION = 'building-blueprint/2';
 
-const BLUE: Vec3 = [24, 60, 116], INK: Vec3 = [236, 243, 255];
+const SCHEMES = { ink: { bg: [255, 255, 255] as Vec3, ink: [16, 16, 16] as Vec3 }, blueprint: { bg: [24, 60, 116] as Vec3, ink: [236, 243, 255] as Vec3 } };
 
-interface Sheet { W: number; H: number; rgb: Uint8Array }
+interface Sheet { W: number; H: number; rgb: Uint8Array; inkC: Vec3 }
 function ink(c: Sheet, x: number, y: number, a: number, r = 0): void {
     for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
         const xi = Math.round(x) + dx, yi = Math.round(y) + dy;
         if (xi < 0 || yi < 0 || xi >= c.W || yi >= c.H) continue;
         const o = (yi * c.W + xi) * 3;
-        for (let k = 0; k < 3; k++) c.rgb[o + k] = Math.round(c.rgb[o + k] * (1 - a) + INK[k] * a);
+        for (let k = 0; k < 3; k++) c.rgb[o + k] = Math.round(c.rgb[o + k] * (1 - a) + c.inkC[k] * a);
     }
 }
-/** A line, optionally dashed (dash pattern in pixels: [on, off] or [on, off, dot-on, off] for a centre line). */
+/** A line of weight r (a square brush), optionally dashed ([on, off] or [on, off, dot, off] for a centre line). */
 function line(c: Sheet, x0: number, y0: number, x1: number, y1: number, a: number, r = 0, pattern?: number[]): void {
     const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
     const period = pattern ? pattern.reduce((p, q) => p + q, 0) : 0;
@@ -97,10 +108,10 @@ function line(c: Sheet, x0: number, y0: number, x1: number, y1: number, a: numbe
         ink(c, x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n, a, r);
     }
 }
-function text(c: Sheet, x: number, y: number, s: string, scale: number): void { drawText(c.rgb, c.W, c.H, Math.round(x), Math.round(y), s, scale, INK); }
+function text(c: Sheet, x: number, y: number, s: string, scale: number): void { drawText(c.rgb, c.W, c.H, Math.round(x), Math.round(y), s, scale, c.inkC); }
 const textW = (s: string, scale: number) => s.length * 6 * scale;
-
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const iou = (a: number[], b: number[]) => { const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])), i = ix * iy; return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i || 1); };
 
 /** The depth (along forward) of the nearest front-facing triangle at each pixel. */
 function depthBuffer(m: Mesh, view: LineDrawingView, W: number, H: number, col: (u: number) => number, row: (v: number) => number): Float32Array {
@@ -129,10 +140,8 @@ function depthBuffer(m: Mesh, view: LineDrawingView, W: number, H: number, col: 
     return buf;
 }
 
-const iou = (a: number[], b: number[]) => { const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])), iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])), i = ix * iy; return i / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i || 1); };
-
 function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: BlueprintInputs, P: BlueprintParams, azimuth: number, groundY: number): { png: Sheet; stats: BlueprintReport['views'][number] } {
-    const { forward, right, up } = view, isPlan = Math.abs(forward[1]) > 0.9;
+    const { forward, right, up } = view, isPlan = Math.abs(forward[1]) > 0.9, sc = SCHEMES[P.scheme];
     const u = (i: number) => m.P[3 * i] * right[0] + m.P[3 * i + 1] * right[1] + m.P[3 * i + 2] * right[2];
     const v = (i: number) => m.P[3 * i] * up[0] + m.P[3 * i + 1] * up[1] + m.P[3 * i + 2] * up[2];
     const d = (i: number) => m.P[3 * i] * forward[0] + m.P[3 * i + 1] * forward[1] + m.P[3 * i + 2] * forward[2];
@@ -143,90 +152,135 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
     if (long / pixelM > P.maxDimPx) pixelM = long / P.maxDimPx;
     const dw = Math.ceil((uMax - uMin) / pixelM) + 1, dh = Math.ceil((vMax - vMin) / pixelM) + 1;
     const M = P.marginPx, W = dw + 2 * M, H = dh + 2 * M + P.titlePx;
-    const sheet: Sheet = { W, H, rgb: new Uint8Array(W * H * 3) };
-    for (let i = 0; i < W * H; i++) sheet.rgb.set(BLUE, i * 3);
-    // drawing pixels (local to the drawing area) and sheet pixels
+    const sheet: Sheet = { W, H, rgb: new Uint8Array(W * H * 3), inkC: sc.ink };
+    for (let i = 0; i < W * H; i++) sheet.rgb.set(sc.bg, i * 3);
     const col = (uu: number) => (uu - uMin) / pixelM, row = (vv: number) => (vMax - vv) / pixelM;
     const X = (uu: number) => M + col(uu), Y = (vv: number) => M + row(vv);
-    const ts = Math.max(1, Math.min(3, Math.round(Math.min(W, H * 0.6) / 700))), lw = Math.max(0, Math.round(Math.max(dw, dh) / 3000));
+    const ts = Math.max(1, Math.min(3, Math.round(Math.min(W, H * 0.6) / 700)));
+    // weights: the silhouette heaviest (a 3 px brush), everything else one pixel, told apart by its tone (alpha)
+    const heavy = 1, medium = 0;
+    const TONE = { structure: 1, opening: 0.85, fine: 0.5 };
     const depth = depthBuffer(m, view, dw, dh, col, row);
     const visibleAt = (uu: number, vv: number, dd: number, eps: number) => { const x = Math.round(col(uu)), y = Math.round(row(vv)); if (x < 0 || y < 0 || x >= dw || y >= dh) return false; let best = Infinity; for (let k = -1; k <= 1; k++) for (let j = -1; j <= 1; j++) { const xx = x + j, yy = y + k; if (xx >= 0 && yy >= 0 && xx < dw && yy < dh) best = Math.min(best, depth[yy * dw + xx]); } return dd <= best + eps; };
+    // an inferred element (a bay, a window) lies on the surface the viewer sees: within eps of it, in front or behind (never over empty background)
+    const onSurface = (uu: number, vv: number, dd: number, eps: number) => { const x = Math.round(col(uu)), y = Math.round(row(vv)); if (x < 0 || y < 0 || x >= dw || y >= dh) return false; const b = depth[y * dw + x]; return Number.isFinite(b) && Math.abs(dd - b) <= eps; };
+    const seg = (a: Vec3, b: Vec3, alpha: number, r: number, pattern?: number[]) => line(sheet, X(dot(a, right)), Y(dot(a, up)), X(dot(b, right)), Y(dot(b, up)), alpha, r, pattern);
+    const quad = (q: Vec3[], alpha: number, r: number, pattern?: number[]) => { for (let k = 0; k < 4; k++) seg(q[k], q[(k + 1) % 4], alpha, r, pattern); };
+    const seen = (p: Vec3) => onSurface(dot(p, right), dot(p, up), dot(p, forward), P.windowDepthM);
 
-    // the grid: every gridM metres, faint, over the drawing area
-    for (let g = Math.ceil(uMin / P.gridM) * P.gridM; g <= uMax; g += P.gridM) line(sheet, X(g), M, X(g), M + dh, 0.07);
-    const gBase = isPlan ? Math.ceil(vMin / P.gridM) * P.gridM : groundY;
-    for (let g = gBase; g <= vMax; g += P.gridM) if (g >= vMin) line(sheet, M, Y(g), M + dw, Y(g), 0.07);
-    // the frame
-    for (let k = 0; k <= lw; k++) { line(sheet, 12 + k, 12 + k, W - 13 - k, 12 + k, 0.9); line(sheet, 12 + k, H - 13 - k, W - 13 - k, H - 13 - k, 0.9); line(sheet, 12 + k, 12 + k, 12 + k, H - 13 - k, 0.9); line(sheet, W - 13 - k, 12 + k, W - 13 - k, H - 13 - k, 0.9); }
+    if (P.scheme === 'blueprint') {
+        for (let g = Math.ceil(uMin / P.gridM) * P.gridM; g <= uMax; g += P.gridM) line(sheet, X(g), M, X(g), M + dh, 0.07);
+        for (let g = isPlan ? Math.ceil(vMin / P.gridM) * P.gridM : groundY; g <= vMax; g += P.gridM) if (g >= vMin) line(sheet, M, Y(g), M + dw, Y(g), 0.07);
+    }
+    for (let k = 0; k <= 1; k++) { line(sheet, 12 + k, 12 + k, W - 13 - k, 12 + k, 0.9); line(sheet, 12 + k, H - 13 - k, W - 13 - k, H - 13 - k, 0.9); line(sheet, 12 + k, 12 + k, 12 + k, H - 13 - k, 0.9); line(sheet, W - 13 - k, 12 + k, W - 13 - k, H - 13 - k, 0.9); }
 
-    // the outline: silhouettes and creases along the view's axes, hidden lines removed; horizontal runs tallied into levels
-    const sinAxis = Math.sin((P.axisDeg * Math.PI) / 180);
-    const edges = classifyEdges(m, forward, Math.cos((P.creaseDeg * Math.PI) / 180), P.minEdgeLenM).filter(e => e.kind !== 'boundary');
-    const levelBins = new Map<number, number>();
-    let outlineEdges = 0;
-    for (const e of edges) {
-        const ua = u(e.a), va = v(e.a), ub = u(e.b), vb = v(e.b), len = Math.hypot(ub - ua, vb - va);
-        if (!(len > 0) || Math.min(Math.abs(ub - ua), Math.abs(vb - va)) / len > sinAxis) continue;
-        const da = d(e.a), db = d(e.b), n = Math.max(1, Math.round((len / pixelM) * 1.3));
-        let drawnPx = 0;
-        for (let s = 0; s <= n; s++) {
-            const f = s / n, uu = ua + (ub - ua) * f, vv = va + (vb - va) * f;
-            if (!visibleAt(uu, vv, da + (db - da) * f, P.depthEpsM)) continue;
-            ink(sheet, X(uu), Y(vv), e.kind === 'silhouette' ? 1 : 0.7, e.kind === 'silhouette' ? lw : 0);
-            drawnPx++;
+    // 1. structure: each facing wall's recessed bays, a panel with its reveal (the piers stand between them)
+    const cosFacing = Math.cos((P.facingDeg * Math.PI) / 180);
+    let walls = 0, bays = 0;
+    if (!isPlan) for (const w of inputs.walls ?? []) {
+        if (-dot(w.normal, forward) < cosFacing) continue;
+        const at = (uu: number, y: number): Vec3 => [w.normal[0] * w.offset + w.axisU[0] * uu, y, w.normal[2] * w.offset + w.axisU[2] * uu];
+        let any = false;
+        for (const b of w.bays) {
+            if (!seen(at((b.u0 + b.u1) / 2, (b.y0 + b.y1) / 2))) continue;
+            quad([at(b.u0, b.y0), at(b.u1, b.y0), at(b.u1, b.y1), at(b.u0, b.y1)], TONE.structure, medium);
+            const r = Math.min(P.revealM, (b.u1 - b.u0) / 4);
+            quad([at(b.u0 + r, b.y0), at(b.u1 - r, b.y0), at(b.u1 - r, b.y1 - r), at(b.u0 + r, b.y1 - r)], TONE.fine, 0);
+            bays++; any = true;
         }
-        if (!drawnPx) continue;
-        outlineEdges++;
-        if (!isPlan && Math.abs(vb - va) <= sinAxis * len) { const bin = Math.round(((va + vb) / 2) / P.levelBinM); levelBins.set(bin, (levelBins.get(bin) ?? 0) + (drawnPx / (n + 1)) * len); }
+        if (any) walls++;
     }
 
-    // the windows: each facade facing this view, its rects mapped through its frame; mirrored about its axis where symmetric
-    const cosFacing = Math.cos((P.facingDeg * Math.PI) / 180);
-    let facadesDrawn = 0, windows = 0, mirrored = 0, facadeAxes = 0;
+    // 2. openings: each facing facade's windows with their frames, mullions (its panes), sills and the spandrels between
+    let facadesDrawn = 0, windows = 0, panes = 0, sills = 0, spandrels = 0, mirrored = 0, facadeAxes = 0;
     const readingOf = (id: number) => inputs.symmetry?.facades.find(f => f.facadeId === id);
     if (!isPlan) for (const fc of inputs.facades ?? []) {
         const f = fc.frame;
         if (-dot(f.normal, forward) < cosFacing) continue;
         const world = (s: number, t: number): Vec3 => [f.centroid[0] + s * f.axisS[0] + t * f.axisT[0], f.centroid[1] + s * f.axisS[1] + t * f.axisT[1], f.centroid[2] + s * f.axisS[2] + t * f.axisT[2]];
         const toS = (x: number) => f.orthoSMin + x * f.pixel, toT = (y: number) => f.orthoTMax - y * f.pixel;
-        const drawRect = (r: number[], pattern?: number[]): boolean => {
-            const s0 = toS(r[0]), s1 = toS(r[2]), t0 = toT(r[3]), t1 = toT(r[1]);
-            const cw = world((s0 + s1) / 2, (t0 + t1) / 2);
-            if (!visibleAt(dot(cw, right), dot(cw, up), dot(cw, forward), P.windowDepthM)) return false;
-            const q = [world(s0, t0), world(s1, t0), world(s1, t1), world(s0, t1)].map(p => [X(dot(p, right)), Y(dot(p, up))]);
-            for (let k = 0; k < 4; k++) line(sheet, q[k][0], q[k][1], q[(k + 1) % 4][0], q[(k + 1) % 4][1], pattern ? 0.55 : 0.75, 0, pattern);
-            return true;
-        };
+        const rectWorld = (r: number[]) => { const s0 = toS(r[0]), s1 = toS(r[2]), t0 = toT(r[3]), t1 = toT(r[1]); return { s0, s1, t0, t1, q: [world(s0, t0), world(s1, t0), world(s1, t1), world(s0, t1)] }; };
+        const visibleRect = (r: number[]) => { const g = rectWorld(r); return seen(world((g.s0 + g.s1) / 2, (g.t0 + g.t1) / 2)) ? g : undefined; };
         let any = false;
-        for (const r of fc.rects) if (drawRect(r)) { windows++; any = true; }
-        // the facade's own mirror: its axis, and each window's mirror where none stands
+        const drawn: Array<{ s0: number; s1: number; t0: number; t1: number }> = [];
+        for (const r of fc.rects) {
+            const g = visibleRect(r);
+            if (!g) continue;
+            quad(g.q, TONE.opening, 0);
+            line(sheet, X(dot(world(g.s0 - P.sillM, g.t0), right)), Y(dot(world(g.s0 - P.sillM, g.t0), up)), X(dot(world(g.s1 + P.sillM, g.t0), right)), Y(dot(world(g.s1 + P.sillM, g.t0), up)), TONE.opening, 0);
+            windows++; sills++; any = true; drawn.push(g);
+        }
+        // the mullions: the reading's panes inside each window
+        for (const p of fc.panes ?? []) { const g = visibleRect(p); if (!g) continue; quad(g.q, TONE.fine, 0); panes++; }
+        // the spandrels: between two windows of one column (overlapping in s by half) with a gap of spandrelMinM..spandrelMaxM
+        const byCol = [...drawn].sort((a, b) => a.s0 - b.s0 || b.t1 - a.t1);
+        for (let i = 0; i < byCol.length; i++) {
+            const a = byCol[i];
+            let below: typeof a | undefined;
+            for (const b of byCol) {
+                if (b === a || b.t1 > a.t0) continue;
+                const ov = Math.min(a.s1, b.s1) - Math.max(a.s0, b.s0);
+                if (ov < 0.5 * Math.min(a.s1 - a.s0, b.s1 - b.s0)) continue;
+                if (!below || b.t1 > below.t1) below = b;
+            }
+            if (!below) continue;
+            const gap = a.t0 - below.t1;
+            if (gap < P.spandrelMinM || gap > P.spandrelMaxM) continue;
+            const s0 = Math.max(a.s0, below.s0) + P.spandrelInsetM, s1 = Math.min(a.s1, below.s1) - P.spandrelInsetM, t0 = below.t1 + P.spandrelInsetM, t1 = a.t0 - P.spandrelInsetM;
+            if (s1 - s0 < 0.2 || t1 - t0 < 0.15) continue;
+            quad([world(s0, t0), world(s1, t0), world(s1, t1), world(s0, t1)], TONE.fine, 0);
+            spandrels++;
+        }
+        // the facade's own mirror: its axis, and each window's mirror into a site no window touches
         const rd = readingOf(fc.facadeId);
         if (rd && rd.detected && !rd.periodic && rd.axisS !== undefined && (rd.ncc ?? 0) >= P.mirrorNcc) {
             const a = rd.axisS, toX = (s: number) => (s - f.orthoSMin) / f.pixel;
             for (const r of fc.rects) {
                 const mr = [toX(2 * a - toS(r[2])), r[1], toX(2 * a - toS(r[0])), r[3]];
-                if (mr[0] < 0 || mr[2] > f.width) continue;
-                if (fc.rects.some(o => iou(o, mr) > 0)) continue; // only into a site no window touches
-                if (drawRect(mr, [4, 3])) { mirrored++; any = true; }
+                if (mr[0] < 0 || mr[2] > f.width || fc.rects.some(o => iou(o, mr) > 0)) continue;
+                const g = visibleRect(mr);
+                if (!g) continue;
+                quad(g.q, 0.6, 0, [4, 3]);
+                mirrored++; any = true;
             }
             const tTop = f.tMax ?? f.orthoTMax, tBot = f.tMin ?? f.orthoTMax - f.height * f.pixel;
-            const p0 = world(a, tBot), p1 = world(a, tTop);
-            const mid = world(a, (tBot + tTop) / 2);
-            if (visibleAt(dot(mid, right), dot(mid, up), dot(mid, forward), P.windowDepthM)) { line(sheet, X(dot(p0, right)), Y(dot(p0, up)), X(dot(p1, right)), Y(dot(p1, up)), 0.6, 0, [14, 4, 3, 4]); facadeAxes++; }
+            if (seen(world(a, (tBot + tTop) / 2))) { seg(world(a, tBot), world(a, tTop), 0.55, 0, [14, 4, 3, 4]); facadeAxes++; }
         }
         if (any) facadesDrawn++;
     }
 
-    // the building's plan mirrors: on an elevation, the ones whose plane holds the view direction (seen edge on); on the
-    // plan, every one, across the drawing
+    // 3. the outline: silhouettes heaviest, creases medium, along the view's axes; long horizontal runs doubled as ledges
+    const sinAxis = Math.sin((P.axisDeg * Math.PI) / 180);
+    const edges = classifyEdges(m, forward, Math.cos((P.creaseDeg * Math.PI) / 180), P.minEdgeLenM).filter(e => e.kind !== 'boundary');
+    const levelBins = new Map<number, number>();
+    let outlineEdges = 0, ledges = 0;
+    for (const e of edges) {
+        const ua = u(e.a), va = v(e.a), ub = u(e.b), vb = v(e.b), len = Math.hypot(ub - ua, vb - va);
+        if (!(len > 0) || Math.min(Math.abs(ub - ua), Math.abs(vb - va)) / len > sinAxis) continue;
+        const da = d(e.a), db = d(e.b), n = Math.max(1, Math.round((len / pixelM) * 1.3));
+        const horizontal = !isPlan && Math.abs(vb - va) <= sinAxis * len;
+        let drawnPx = 0;
+        for (let s = 0; s <= n; s++) {
+            const f = s / n, uu = ua + (ub - ua) * f, vv = va + (vb - va) * f;
+            if (!visibleAt(uu, vv, da + (db - da) * f, P.depthEpsM)) continue;
+            ink(sheet, X(uu), Y(vv), 1, e.kind === 'silhouette' ? heavy : medium);
+            if (horizontal && len >= P.ledgeMinM) ink(sheet, X(uu), Y(vv - P.ledgeM), TONE.opening, 0);
+            drawnPx++;
+        }
+        if (!drawnPx) continue;
+        outlineEdges++;
+        if (horizontal && len >= P.ledgeMinM) ledges++;
+        if (horizontal) { const bin = Math.round(((va + vb) / 2) / P.levelBinM); levelBins.set(bin, (levelBins.get(bin) ?? 0) + (drawnPx / (n + 1)) * len); }
+    }
+
+    // 4. the building's plan mirrors as centre lines
     let planAxes = 0;
     const mirrors = inputs.symmetry ? [inputs.symmetry.plan.massing.best, ...inputs.symmetry.plan.massing.mirrors].filter((q, i, all) => q && q.score >= P.planMirrorScore && all.findIndex(o => Math.abs(o.angleDeg - q.angleDeg) < 1) === i) : [];
     for (const mi of mirrors) {
         const dir: Vec3 = [mi.dir[0], 0, mi.dir[1]], pt: Vec3 = [mi.point[0], 0, mi.point[1]];
         if (isPlan) {
             const L = Math.max(uMax - uMin, vMax - vMin);
-            const a: Vec3 = [pt[0] - dir[0] * L, 0, pt[2] - dir[2] * L], b: Vec3 = [pt[0] + dir[0] * L, 0, pt[2] + dir[2] * L];
-            line(sheet, X(dot(a, right)), Y(dot(a, up)), X(dot(b, right)), Y(dot(b, up)), 0.55, 0, [18, 5, 3, 5]);
+            seg([pt[0] - dir[0] * L, 0, pt[2] - dir[2] * L], [pt[0] + dir[0] * L, 0, pt[2] + dir[2] * L], 0.6, 0, [18, 5, 3, 5]);
             planAxes++;
             continue;
         }
@@ -240,7 +294,7 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
         planAxes++;
     }
 
-    // the levels: heights where horizontal outline runs across levelShare of the width, labelled above the lowest point
+    // 5. levels: a datum mark and its height at each, the line itself only past the building's edges
     const levels: number[] = [];
     if (!isPlan) {
         const minRun = P.levelShare * (uMax - uMin);
@@ -252,49 +306,47 @@ function renderSheet(m: Mesh, view: LineDrawingView, label: string, inputs: Blue
             i = k;
         }
         for (const lv of levels) {
-            line(sheet, M - 20, Y(lv), M + dw + 20, Y(lv), 0.35, 0, [10, 6]);
-            const s = `+${(lv - groundY).toFixed(1)}`;
-            text(sheet, M + dw + 24, Y(lv) - 3.5 * ts, s, ts);
+            const y = Y(lv), xe = M + dw + 16;
+            line(sheet, M + dw + 2, y, xe + 36, y, 0.8, 0);
+            for (let k = 0; k <= 7; k++) line(sheet, xe + 8 - k, y - k, xe + 8 + k, y - k, 0.9, 0); // the datum triangle
+            text(sheet, xe + 40, y - 3.5 * ts, `+${(lv - groundY).toFixed(1)}`, ts);
         }
     }
 
-    // overall dimensions: the width below, the height (or the plan's depth) to the left, with ticks and figures
+    // 6. dimensions, scale bar, title block
     const wM = uMax - uMin, hM = vMax - vMin, yDim = M + dh + 40, xDim = M - 50;
-    line(sheet, M, yDim, M + dw, yDim, 0.9, lw);
-    for (const x of [M, M + dw]) line(sheet, x, yDim - 10, x, yDim + 10, 0.9, lw);
+    line(sheet, M, yDim, M + dw, yDim, 0.9, 0);
+    for (const x of [M, M + dw]) { line(sheet, x, yDim - 10, x, yDim + 10, 0.9, 0); line(sheet, x - 6, yDim + 6, x + 6, yDim - 6, 0.9, 0); }
     const wText = `${wM.toFixed(1)} M`;
     text(sheet, M + dw / 2 - textW(wText, ts) / 2, yDim + 8, wText, ts);
-    line(sheet, xDim, M, xDim, M + dh, 0.9, lw);
-    for (const y of [M, M + dh]) line(sheet, xDim - 10, y, xDim + 10, y, 0.9, lw);
+    line(sheet, xDim, M, xDim, M + dh, 0.9, 0);
+    for (const y of [M, M + dh]) { line(sheet, xDim - 10, y, xDim + 10, y, 0.9, 0); line(sheet, xDim - 6, y + 6, xDim + 6, y - 6, 0.9, 0); }
     const hText = `${hM.toFixed(1)} M`;
     text(sheet, Math.max(16, xDim - textW(hText, ts) - 6), M + dh / 2, hText, ts);
-
-    // the scale bar and the title block, along the bottom
-    const yb = H - P.titlePx + 30, bx = M;
-    const step = 10 / pixelM;
+    const yb = H - P.titlePx + 30, bx = M, step = 10 / pixelM;
     for (let k = 0; k < 5; k++) { const x0 = bx + k * step; if (k % 2 === 0) for (let y = yb; y < yb + 8; y++) line(sheet, x0, y, x0 + step, y, 0.9); else { line(sheet, x0, yb, x0 + step, yb, 0.9); line(sheet, x0, yb + 7, x0 + step, yb + 7, 0.9); } }
-    for (const k of [0, 1, 2, 5]) text(sheet, bx + Math.min(k, 5) * step - 3 * ts, yb + 14, k === 5 ? '50 M' : `${k * 10}`, ts);
+    for (const k of [0, 1, 2, 5]) text(sheet, bx + k * step - 3 * ts, yb + 14, k === 5 ? '50 M' : `${k * 10}`, ts);
     const tbW = Math.min(W - 2 * M - 5 * step - 40, Math.max(420, Math.round(W * 0.55))), tbX = W - 24 - tbW, tbY = H - P.titlePx - 2, tbH = P.titlePx - 16;
-    for (const [a, b, c2, dd] of [[tbX, tbY, tbX + tbW, tbY], [tbX, tbY + tbH, tbX + tbW, tbY + tbH], [tbX, tbY, tbX, tbY + tbH], [tbX + tbW, tbY, tbX + tbW, tbY + tbH], [tbX, tbY + 14 * ts + 6, tbX + tbW, tbY + 14 * ts + 6]]) line(sheet, a, b, c2, dd, 0.9, lw);
+    for (const [a, b, c2, dd] of [[tbX, tbY, tbX + tbW, tbY], [tbX, tbY + tbH, tbX + tbW, tbY + tbH], [tbX, tbY, tbX, tbY + tbH], [tbX + tbW, tbY, tbX + tbW, tbY + tbH], [tbX, tbY + 14 * ts + 6, tbX + tbW, tbY + 14 * ts + 6]]) line(sheet, a, b, c2, dd, 0.9, 0);
     const wrapTo = (str: string, chars: number) => { const out: string[] = []; let r = ''; for (const w of str.split(' ')) { if (r && r.length + 1 + w.length > chars) { out.push(r); r = ''; } r = r ? `${r} ${w}` : w; } if (r) out.push(r); return out; };
     const rows = [
         `${(inputs.title ?? 'BUILDING').toUpperCase()}  -  ${label}`,
-        `GRID ${P.gridM} M.  1 PX = ${pixelM.toFixed(3)} M.  VIEWS SQUARE TO THE WALLS (${azimuth.toFixed(1)} DEG).${inputs.note ? `  ${inputs.note.toUpperCase()}` : ''}`,
-        'SOLID: SCAN OUTLINE AND CREASES (MEASURED). WINDOWS: FACADE READER AND WINDOW ARRAYS (PHOTO-INFERRED).',
-        'DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY. LEVELS: METRES ABOVE THE LOWEST POINT.'
+        `1 PX = ${pixelM.toFixed(3)} M. VIEWS SQUARE TO THE WALLS (${azimuth.toFixed(1)} DEG). LEVELS IN METRES ABOVE THE LOWEST POINT.${inputs.note ? ` ${inputs.note.toUpperCase()}` : ''}`,
+        'HEAVY: SILHOUETTE. FULL TONE: CREASES, LEDGES (DOUBLED) AND RECESSED BAYS. LIGHTER: WINDOWS AND SILLS. LIGHTEST: REVEALS, MULLIONS, SPANDREL PANELS.',
+        'OUTLINE AND LEVELS MEASURED FROM THE SCAN. BAYS, WINDOWS, PANES AND SPANDRELS INFERRED FROM THE FACADE PHOTOS (PHOTO-INFERRED). DASHED: A WINDOW MIRRORED ABOUT ITS FACADE\'S AXIS (GENERATED). DASH-DOT: AXIS OF SYMMETRY.'
     ];
     const small = Math.max(1, ts - 1), chars = Math.floor((tbW - 20) / (6 * small));
     text(sheet, tbX + 10, tbY + 6, wrapTo(rows[0], Math.floor((tbW - 20) / (6 * ts)))[0], ts);
     rows.slice(1).flatMap(r => wrapTo(r, chars)).slice(0, Math.floor((tbH - 14 * ts - 16) / (10 * small))).forEach((r, i) => text(sheet, tbX + 10, tbY + 14 * ts + 12 + i * 10 * small, r, small));
     return {
         png: sheet,
-        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, facades: facadesDrawn, windows, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10] }
+        stats: { name: view.name, label, width: W, height: H, pixelM, originU: uMin - M * pixelM, originV: vMax + M * pixelM, right, up, forward, outlineEdges, ledges, walls, bays, facades: facadesDrawn, windows, panes, sills, spandrels, mirroredWindows: mirrored, facadeAxes, planAxes, levels: levels.map(l => Math.round((l - groundY) * 10) / 10), extentM: [Math.round(wM * 10) / 10, Math.round(hM * 10) / 10] }
     };
 }
 
 /**
- * The blueprint sheets of a scan (a triangle soup in the frame its facades and symmetry are read in): four elevations
- * square to its walls (A to D) and the roof plan, with the windows, mirrors and centre lines `inputs` gives.
+ * The elevation set of a scan (a triangle soup in the frame its facades, walls and symmetry are read in): four
+ * elevations square to its walls (A to D) and the roof plan, constructed from what `inputs` gives.
  */
 export function renderBlueprints(positions: Float32Array | Float64Array, inputs: BlueprintInputs = {}, P: BlueprintParams = BLUEPRINT_PARAMS): { report: BlueprintReport; pngs: Array<{ name: string; width: number; height: number; rgb: Uint8Array }> } {
     const t0 = Date.now();

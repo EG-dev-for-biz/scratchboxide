@@ -27,7 +27,7 @@ import { glbSoup } from '../../../3d-engine/staged-location/facade-lattice';
 import { LINE_DRAWING_PARAMS, renderBuildingLineDrawings, type LineDrawingParams } from '../../../3d-engine/staged-location/building-line-drawing';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
-import { renderBlueprints, type BlueprintFacade, type BlueprintInputs } from '../../../3d-engine/staged-location/building-blueprint';
+import { renderBlueprints, type BlueprintFacade, type BlueprintInputs, type BlueprintWall } from '../../../3d-engine/staged-location/building-blueprint';
 import { detectSymmetry } from '../../../3d-engine/staged-location/pipeline-k/symmetry';
 import { stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 
@@ -63,16 +63,19 @@ export interface BuildingLineDrawingRequest { runId?: string; glbPath?: string; 
  * Pipeline K's reading of the cut-out beside a scan (its rectified orthos: tile_refine's relief_orthos_k_*, the newest
  * with window_fit.json): each facade's frame and windows. Undefined when K never read this cut-out.
  */
-export function kReadingBeside(clayGlb: string): { dir: string; facades: BlueprintFacade[] } | undefined {
+export function kReadingBeside(clayGlb: string): { dir: string; facades: BlueprintFacade[]; walls: BlueprintWall[] } | undefined {
     const root = path.dirname(clayGlb);
     const dirs = fs.readdirSync(root).filter(d => /^relief_orthos_k_[0-9a-f]+$/.test(d) && fs.existsSync(path.join(root, d, 'window_fit.json')) && fs.existsSync(path.join(root, d, 'facades.json')))
         .map(d => path.join(root, d)).sort((a, b) => fs.statSync(path.join(b, 'window_fit.json')).mtimeMs - fs.statSync(path.join(a, 'window_fit.json')).mtimeMs);
     if (!dirs.length) return undefined;
     const frames = (JSON.parse(fs.readFileSync(path.join(dirs[0], 'facades.json'), 'utf8')) as { facades: Array<BlueprintFacade['frame'] & { facadeId: number }> }).facades;
-    const fit = (JSON.parse(fs.readFileSync(path.join(dirs[0], 'window_fit.json'), 'utf8')) as { facades: Array<{ facadeId: number; rects?: Array<[number, number, number, number]> }> }).facades;
+    const fit = (JSON.parse(fs.readFileSync(path.join(dirs[0], 'window_fit.json'), 'utf8')) as { facades: Array<{ facadeId: number; rects?: Array<[number, number, number, number]>; panes?: Array<[number, number, number, number]> }> }).facades;
     const facades: BlueprintFacade[] = [];
-    for (const e of fit) { const frame = frames.find(f => f.facadeId === e.facadeId); if (frame && e.rects?.length) facades.push({ facadeId: e.facadeId, frame, rects: e.rects }); }
-    return { dir: dirs[0], facades };
+    for (const e of fit) { const frame = frames.find(f => f.facadeId === e.facadeId); if (frame && e.rects?.length) facades.push({ facadeId: e.facadeId, frame, rects: e.rects, ...(e.panes?.length ? { panes: e.panes } : {}) }); }
+    // the wall grammar's recessed bays, per wall (wall_grammar.json), when K read them
+    const wgFile = path.join(dirs[0], 'wall_grammar.json');
+    const walls = fs.existsSync(wgFile) ? (JSON.parse(fs.readFileSync(wgFile, 'utf8')) as { walls?: BlueprintWall[] }).walls ?? [] : [];
+    return { dir: dirs[0], facades, walls };
 }
 
 export async function runBuildingLineDrawing(req: BuildingLineDrawingRequest, workspaceRoot: string, stagedRoot = stagedWorkspaceRoot()): Promise<{ summary: string; payload: Record<string, unknown> }> {
@@ -124,7 +127,7 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
     const k = kReadingBeside(glb);
     let lowest = Infinity;
     for (let i = 1; i < soup.length; i += 3) if (soup[i] < lowest) lowest = soup[i];
-    const inputs: BlueprintInputs = { ...(k ? { facades: k.facades } : {}), note: req.runId ? `run ${req.runId}` : path.basename(glb) };
+    const inputs: BlueprintInputs = { ...(k ? { facades: k.facades, walls: k.walls } : {}), note: req.runId ? `run ${req.runId}` : path.basename(glb) };
     let symmetryNote = 'no symmetry read (pipeline K wrote no facade photos beside the cut-out)';
     if (k) {
         try { inputs.symmetry = await detectSymmetry({ scanGlb: glb, groundY: lowest, footprint: [], orthosDir: k.dir }); symmetryNote = `symmetry read from the scan and the facade photos (${inputs.symmetry.facades.filter(f => f.detected && !f.periodic).length} facades mirror-symmetric)`; }
@@ -147,17 +150,17 @@ async function blueprintOf(req: BuildingLineDrawingRequest, glb: string, soup: F
     }
     const json = path.join(outDir, 'blueprint.json');
     fs.writeFileSync(json, JSON.stringify({ source: glb, ...(k ? { windowsFrom: k.dir } : {}), ...report }, null, 1));
-    const per = report.views.map(v => `${v.label.toLowerCase()} (${v.extentM[0]} x ${v.extentM[1]} m${v.windows ? `, ${v.windows} windows${v.mirroredWindows ? ` and ${v.mirroredWindows} mirrored` : ''}` : ''}${v.levels.length ? `, ${v.levels.length} levels` : ''}${v.planAxes ? `, ${v.planAxes} centre line${v.planAxes > 1 ? 's' : ''}` : ''})`).join('; ');
+    const per = report.views.map(v => `${v.label.toLowerCase()} (${v.extentM[0]} x ${v.extentM[1]} m${v.bays ? `, ${v.bays} recessed bays` : ''}${v.windows ? `, ${v.windows} windows with ${v.panes} panes, ${v.spandrels} spandrels${v.mirroredWindows ? `, ${v.mirroredWindows} mirrored` : ''}` : ''}${v.ledges ? `, ${v.ledges} ledge runs` : ''}${v.levels.length ? `, ${v.levels.length} levels` : ''}${v.planAxes ? `, ${v.planAxes} centre line${v.planAxes > 1 ? 's' : ''}` : ''})`).join('; ');
     return {
-        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: blueprint sheets of the scan, four elevations square to its walls (${report.wallAzimuthDeg} degrees) and the roof plan: ${per}. The outline and levels are measured; the windows are ${k ? 'pipeline K\'s facade reader and window arrays (photo-inferred)' : 'not drawn (no pipeline K reading of this cut-out)'}; ${symmetryNote}; dashed windows are mirrors of windows about their facade\'s axis (generated). Files in ${wsDir}.`,
+        summary: `${BUILDING_LINE_DRAWING_TOOL_NAME}: the building's elevation set, four elevations square to its walls (${report.wallAzimuthDeg} degrees) and the roof plan: ${per}. The outline, ledges and levels are measured; the bays, windows, panes and spandrels are ${k ? 'inferred from pipeline K\'s reading of the facades (its wall grammar, facade reader and window arrays: photo-inferred)' : 'not drawn (no pipeline K reading of this cut-out)'}; ${symmetryNote}; dashed windows are mirrors of windows about their facade\'s axis (generated). Files in ${wsDir}.`,
         payload: { source: glb, ...(k ? { windowsFrom: k.dir } : {}), reportJson: json, files, report }
     };
 }
 
 export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
     name: BUILDING_LINE_DRAWING_TOOL_NAME,
-    description: 'Draw a staged building as an architect\'s blueprint (the default): white line work on blueprint blue, four elevations square to its walls and the roof plan, each with a grid, its levels (the heights its setbacks and parapets run at), overall dimensions, a scale bar and a title block. ' +
-        'The outline is the scan\'s own (measured); the windows are pipeline K\'s reading of the facades (the facade reader and the window arrays: photo-inferred), each a crisp rectangle; each facade\'s mirror axis and the building\'s plan mirrors are read from the scan and the photos and drawn as centre lines, and a window mirrored about its facade\'s axis into an empty site is drawn dashed (generated). ' +
+    description: 'Draw a staged building as an architect\'s elevation set (the default): four elevations square to its walls and the roof plan, black line work on white, each with its levels (datum marks at the heights its setbacks and parapets run at), overall dimensions, a scale bar and a title block, constructed from what the pipeline infers about the building: ' +
+        'the recessed bays and the piers between them (pipeline K\'s wall grammar), each window with its frame, mullions (its pane splits) and sill, the spandrel panels between stacked windows (the facade reader and the window arrays), all photo-inferred; the scan\'s outline with its ledges and cornice bands doubled, measured; each facade\'s mirror axis and the building\'s plan mirrors as centre lines, and a window mirrored about its facade\'s axis into an empty site dashed (generated). Line weights follow an architect\'s hierarchy. ' +
         'style "lines" instead draws the scan as plain line drawings: its silhouette edges (black), crease edges (dark grey: corners, setbacks, cornices, pier sides, where two surfaces meet at creaseDeg or more) and open edges (light grey: the scan\'s own holes and cuts), with hidden lines removed, ' +
         'from four sides square to the building\'s own walls (their dominant direction measured from the scan) and from above (the roof plan, which shows the terraces and setbacks). A geometric guide to what the scan measures on every surface. Geometry only, no model call: every line is a measured edge of the scan. ' +
         'With the textured scan (found beside the run\'s cut-out, or texturedGlbPath) the facade detail the geometry is too coarse to hold (windows, bands, spandrels, mullions) is added from the photo: its strongest edges, mid grey, labelled photo-inferred (an edge in the photo may also be a shadow or a smear); the geometry\'s lines stay measured. ' +
@@ -170,7 +173,7 @@ export const BUILDING_LINE_DRAWING_TOOL_DECLARATION: ToolDeclaration = {
             glbPath: { type: 'STRING', description: 'Instead of a run: a GLB (path or /models/... URL) whose triangles carry no node transforms.' },
             texturedGlbPath: { type: 'STRING', description: 'The textured scan whose photo edges add the facade detail (default: textured.glb beside the cut-out).' },
             photo: { type: 'BOOLEAN', description: 'With style "lines": false draws the geometry only, no photo edges (default true when a textured scan is found).' },
-            style: { type: 'STRING', description: '"blueprint" (default): the architect\'s sheets with windows, levels, dimensions and symmetry. "lines": the scan\'s lines and the photo\'s edges.' },
+            style: { type: 'STRING', description: '"blueprint" (default): the architect\'s elevation set with bays, windows, spandrels, ledges, levels, dimensions and symmetry. "lines": the scan\'s lines and the photo\'s edges.' },
             pixelM: { type: 'NUMBER', description: 'Metres per pixel (default 0.1); coarsened so no view passes 4096 px on its long side.' },
             creaseDeg: { type: 'NUMBER', description: 'Two surfaces meeting at this angle or more draw a crease line (default 25).' },
             minEdgeLenM: { type: 'NUMBER', description: 'Edges shorter than this (metres) are mesh noise and not drawn (default 0.3).' },

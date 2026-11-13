@@ -33,17 +33,23 @@ describe('building blueprint: windows on their facades, mirrored about its axis'
         const rects: Array<[number, number, number, number]> = [[30, 20, 50, 50], [150, 20, 170, 50], [30, 70, 50, 100]];
         const symmetry = { schema: 'scratchbox.symmetry/1', frame: '', plan: { cellM: 1, grid: [1, 1], origin: [0, 0], massing: { mass: 0, centroid: [10, 5], best: { angleDeg: 0, point: [10, 5], dir: [0, 1], score: 0.95, share: 1 }, mirrors: [], detectedMirrors: 1, rotation: { order: 1, score: 0, scores: [] } }, tiers: [] },
             facades: [{ facadeId: 1, read: true, detected: true, periodic: false, axisS: 0, ncc: 0.9 }], transforms: [], twins: [], ms: { plan: 0, facades: 0, twins: 0 } } as never;
-        const { report } = renderBlueprints(soup, { facades: [{ facadeId: 1, frame, rects }], symmetry, title: 'Test box' });
+        // one recessed bay on the +z wall (the wall grammar's frame: normal, its offset along it, u along axisU from x = 0)
+        const walls = [{ wallId: 0, normal: [0, 0, 1] as [number, number, number], axisU: [1, 0, 0] as [number, number, number], offset: 10, bays: [{ u0: 2, u1: 6, y0: 1, y1: 11 }] }];
+        const { report } = renderBlueprints(soup, { facades: [{ facadeId: 1, frame, rects }], walls, symmetry, title: 'Test box' });
         // the views turn to the box's walls (0 degrees): the elevation looking at the +z face is the one looking along -z
         const front = report.views.find(v => v.forward[2] < -0.99)!;
         expect(front.windows).toBe(3);
+        // each window has its sill; the two stacked on the left (2 m gap) have a spandrel between them; the bay is drawn
+        expect(front.sills).toBe(3);
+        expect(front.spandrels).toBe(1);
+        expect(front.bays).toBe(1);
         // the unpaired window's mirror (at s = +6..+8 m) is drawn dashed; the paired ones need none
         expect(front.mirroredWindows).toBe(1);
         expect(front.facadeAxes).toBe(1);
         // the plan mirror along z is seen edge on from the front: a centre line
         expect(front.planAxes).toBe(1);
         // the other elevations do not face the facade: no windows on them
-        for (const v of report.views.filter(x => x !== front)) expect(v.windows).toBe(0);
+        for (const v of report.views.filter(x => x !== front)) { expect(v.windows).toBe(0); expect(v.bays).toBe(0); }
         // the top edge runs the full width: a level at 12 m
         expect(front.levels.some(l => Math.abs(l - 12) < 0.6)).toBe(true);
     });
@@ -162,6 +168,13 @@ describe.skipIf(!fs.existsSync(ESB_CLAY))('building line drawing of a real scan 
         const a = rep.views[0], c = rep.views[2], plan = rep.views[4];
         expect(a.windows).toBeGreaterThan(1000);
         expect(c.windows).toBeGreaterThan(1000);
+        // the structure inferred around them: the wall grammar's recessed bays, a sill a window, spandrels between stacked ones
+        const ac = rep.views[2] as unknown as { bays: number; sills: number; spandrels: number; panes: number; ledges: number };
+        expect(ac.bays).toBeGreaterThan(20);
+        expect(ac.sills).toBe(c.windows);
+        expect(ac.spandrels).toBeGreaterThan(1000);
+        expect(ac.panes).toBeGreaterThan(1000);
+        expect(ac.ledges).toBeGreaterThan(50);
         // the setback over the podium (about 107 m) and the top of the shaft's crown (about 334 m) are among its levels
         expect(c.levels.some(l => Math.abs(l - 107) < 3)).toBe(true);
         expect(c.levels.some(l => Math.abs(l - 334) < 3)).toBe(true);
