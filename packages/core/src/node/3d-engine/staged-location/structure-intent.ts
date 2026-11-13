@@ -57,7 +57,8 @@
  *     replaces the bottom-up reading only when it explains latticeExplained of the windows read and overrides at most
  *     latticeMaxNoise of its sites; reads off the lattice stay as read. Facades of one wall (pipeline K's wall grammar,
  *     else overlapping on one plane) are fitted as one lattice from all their windows and share it (wallLattices), so
- *     overlapping readings draw one grid; a facade whose own windows mostly disagree keeps its own.
+ *     overlapping readings draw one grid; a facade whose own windows mostly disagree keeps its own. A wall is first split
+ *     into sub-walls: one plane (a pier face and the bays recessed behind it are two designs) and overlapping extents.
  * 10. The plan's symmetry. Under a plan mirror or rotation scoring planScore or more, a poorly read face whose mapped
  *     partner coincides with it (normal, plane, extent) takes the partner's windows (its own reading and its own rules'
  *     inferences, never what other faces lent it). Tier and plan windows are vetted by the face's photo like any other.
@@ -177,7 +178,9 @@ export const STRUCTURE_INTENT_PARAMS = {
     /** A window column of the bay contradicted on columnNoShare of its sites down the face is dropped from the lattice (folded wrongly), not kept as a detail. */
     columnNoShare: 0.6,
     /** A facade takes its wall's lattice when at least wallMemberExplained of its own windows read (6 or more) sit on it. */
-    wallMemberExplained: 0.4
+    wallMemberExplained: 0.4,
+    /** Sub-walls: facades of one wall within subWallPlaneM of one plane whose extents overlap by subWallOverlap of the smaller. */
+    subWallPlaneM: 0.15, subWallOverlap: 0.3
 };
 export type IntentParams = typeof STRUCTURE_INTENT_PARAMS;
 export const STRUCTURE_INTENT_VERSION = 'structure-intent/4';
@@ -958,7 +961,26 @@ function wallLattices(facades: IntentFacadeInput[], storey: { pitchM: number; da
         parent[root(j)] = root(i);
     }
     facades.forEach((f, i) => { const k = String(root(i)); (groups.get(k) ?? groups.set(k, []).get(k)!).push(f); });
-    for (const members of groups.values()) {
+    // a wall's sub-walls: one plane (within subWallPlaneM: a pier face and the bays recessed behind it are two designs) and
+    // overlapping (by subWallOverlap of the smaller facade: facades that only touch, or cover other heights, keep their own)
+    const subWalls: IntentFacadeInput[][] = [];
+    for (const g of groups.values()) {
+        if (g.length < 2) continue;
+        const par = g.map((_, i) => i), rt = (i: number): number => (par[i] === i ? i : (par[i] = rt(par[i])));
+        for (let i = 0; i < g.length; i++) for (let j = i + 1; j < g.length; j++) {
+            const a = g[i], b = g[j];
+            if (Math.abs(dot(sub(b.frame.centroid, a.frame.centroid), a.frame.normal)) > P.subWallPlaneM) continue;
+            const ea = extent(a), off = sub(b.frame.centroid, a.frame.centroid), eb = extent(b), su = dot(b.frame.axisS, a.frame.axisS);
+            const bs = [dot(off, a.frame.axisS) + su * eb.s0, dot(off, a.frame.axisS) + su * eb.s1].sort((x, y) => x - y), bt = [dot(off, a.frame.axisT) + eb.t0, dot(off, a.frame.axisT) + eb.t1];
+            const ov = Math.max(0, Math.min(ea.s1, bs[1]) - Math.max(ea.s0, bs[0])) * Math.max(0, Math.min(ea.t1, bt[1]) - Math.max(ea.t0, bt[0]));
+            const smaller = Math.min((ea.s1 - ea.s0) * (ea.t1 - ea.t0), (eb.s1 - eb.s0) * (eb.t1 - eb.t0));
+            if (ov >= P.subWallOverlap * smaller) par[rt(j)] = rt(i);
+        }
+        const by = new Map<number, IntentFacadeInput[]>();
+        g.forEach((f, i) => { const k = rt(i); (by.get(k) ?? by.set(k, []).get(k)!).push(f); });
+        for (const m of by.values()) if (m.length >= 2) subWalls.push(m);
+    }
+    for (const members of subWalls) {
         if (members.length < 2) continue;
         const reads = members.map(m => ({ m, r: splitStrips(m.rects, m.panes, P) }));
         if (reads.reduce((a, x) => a + x.r.length, 0) < 6) continue;
