@@ -242,6 +242,26 @@ On the way, the cause of the "stray triangles" in both trials was found and is n
 it is the empty primitives a cut leaves (see the table of known problems). At Penn the twins were clean all along, and
 the ground layer's "scraps" seen there were the same fault.
 
+## One building at full detail (2026-11-13)
+
+Penn 2's twin rebuilt from its own full-detail pipeline K reading (run e124077c: wall photos at 0.07-0.08 m a pixel)
+with the hybrid's texture settings (an 8192 atlas at 0.07 m, roof cells from the scan's photo seen from above, pier
+strips), and swapped into the Penn district in place of the twin made from the district tile.
+
+| | Twin from the district tile | Twin from Penn 2's own reading |
+|---|---|---|
+| Wall photo | 0.15 m a texel | 0.07 m a texel |
+| Windows placed | 1,057 | 1,463 |
+| Roof | one colour | 2,083 cells from the scan's photo |
+| Triangles / size | 107,000 / 15 MB | 298,000 / 41 MB |
+| Model calls | 0 | 0 (K's readings were cached) |
+
+By eye, from matching path-traced views: close up, the fine twin shows single windows with their sashes and mullions
+and recessed glass, where the coarse one shows blurred blocks; this is the largest gain seen in any trial today, and it
+comes from the source resolution. Not better, or worse: the roof cells read as large pale blotches rather than roof
+plant; the top storeys are blocky in both; the pier strips add bright white bands and piers low on one wall whose
+rounded ends look like an artefact; and the upper wall's window grid is less even than the coarse twin's.
+
 ## What this plan does not claim
 
 - The twin has been judged on one building (the ESB). Nothing yet says a district of twins beats K-D or the scan.
