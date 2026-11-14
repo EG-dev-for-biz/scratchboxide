@@ -394,7 +394,11 @@ describe('the view aim, the read\'s masks, the keep rule and the instanced layer
         expect(judgeFamily([v(0.8, 0.5, NaN, 9)]).reason).toMatch(/could not both be measured/);
         const low = judgeFamily([v(0.2, 0.05, 5, 9)]);
         expect(low.keep).toBe(false);
-        expect(low.reason).toMatch(/under IoU 0.3/);
+        expect(low.reason).toMatch(/under IoU 0.5/);
+        // past the floor but not clearly better than the blob (0.6 against 0.5): the scan stays
+        const close = judgeFamily([v(0.6, 0.5, 5, 9)]);
+        expect(close.keep).toBe(false);
+        expect(close.reason).toMatch(/less than 0.15 closer/);
         const a = new Uint8Array([1, 1, 0, 0]), b = new Uint8Array([1, 0, 1, 0]);
         expect(iou(a, b)).toBeCloseTo(1 / 3, 6);
     });
@@ -542,5 +546,23 @@ describe('which views the scan says are clear, and the image budget', () => {
         const own = planFamilyViews({ ...input, params: { reusedPanoBonus: 1 } });
         expect(own.families.map(f => f.views[0]?.panoId)).toEqual(['A', 'B']);
         expect(own.context.length).toBe(2);
+    });
+});
+
+describe('the look check: the rebuild beside its Street View crop', () => {
+    it('crops both images at the photo mask\'s box, and passes only a reply that says same kind and believable', async () => {
+        const { maskCropBox, cropJpeg, parseLookCheck, lookCheckPrompt } = await import('../src/node/3d-engine/staged-location/street-objects/look-check');
+        const W = 100, H = 80, mask = new Uint8Array(W * H);
+        for (let y = 20; y < 60; y++) for (let x = 40; x < 50; x++) mask[y * W + x] = 1;
+        // the box grown by a quarter of its size on each side
+        expect(maskCropBox(mask, W, H)).toEqual([37, 10, 53, 70]);   // 10 px wide: 2.5 rounds to 3
+        expect(maskCropBox(new Uint8Array(W * H), W, H)).toBeUndefined();
+        const jpg = cropJpeg({ width: W, height: H, rgba: new Uint8Array(W * H * 4).fill(200) }, [38, 10, 53, 70]);
+        expect([jpg[0], jpg[1], jpg[2]]).toEqual([0xff, 0xd8, 0xff]);
+        expect(lookCheckPrompt('a grey bollard')).toMatch(/"a grey bollard"/);
+        expect(parseLookCheck('{"sameKind": true, "believable": true, "why": "a round post"}')).toEqual({ sameKind: true, believable: true, why: 'a round post' });
+        expect(parseLookCheck('{"sameKind": true, "believable": false}')).toMatchObject({ sameKind: true, believable: false });
+        expect('error' in (parseLookCheck('{"sameKind": "yes"}') as object)).toBe(true);
+        expect('error' in (parseLookCheck('no') as object)).toBe(true);
     });
 });

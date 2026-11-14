@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { reportStagedSwitchProblems, stagedBuildingPipelineEnv, stagedDistrict, stagedDistrictMode, stagedModelService, stagedSwitchProblems } from '../src/node/3d-engine/staged-location/staged-switches';
+import { reportStagedSwitchProblems, stagedBuildingPipelineEnv, stagedDistrict, stagedDistrictMode, stagedModelService, stagedSwitchProblems, streetObjectsAuto, streetObjectsAutoEnabled, streetObjectsAutoMaxFamilies, STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT } from '../src/node/3d-engine/staged-location/staged-switches';
 import { districtMassingEnabled, proceduralDistrictEnabled } from '../src/node/3d-engine/staged-location/district-massing';
 import { stagedPipelineK } from '../src/node/3d-engine/staged-location/pipeline-k/pipeline-k';
 import { parseStagedLocationArgs } from '../src/node/3d-engine/staged-location/staged-location-tool';
@@ -117,6 +117,28 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
         vi.stubEnv('SCRATCHBOX_STAGED_PROCEDURAL', 'j');
         expect(isolated()).toMatchObject({ pipeline: 'k' });
         expect(isolated().procedural).toBeUndefined();
+    });
+
+    it('rebuilds street objects automatically only when SCRATCHBOX_STAGED_STREET_OBJECTS=1 or the request says so, off by default', () => {
+        expect(streetObjectsAutoEnabled(env({}))).toBe(false);
+        expect(streetObjectsAutoEnabled(env({ SCRATCHBOX_STAGED_STREET_OBJECTS: '1' }))).toBe(true);
+        expect(streetObjectsAutoEnabled(env({ SCRATCHBOX_STAGED_STREET_OBJECTS: 'true' }))).toBe(false); // only the literal '1', like the other opt-in switches
+        expect(streetObjectsAuto({}, env({}))).toBe(false);
+        expect(streetObjectsAuto({}, env({ SCRATCHBOX_STAGED_STREET_OBJECTS: '1' }))).toBe(true);
+        // the request's own choice wins over the environment either way
+        expect(streetObjectsAuto({ streetObjects: false }, env({ SCRATCHBOX_STAGED_STREET_OBJECTS: '1' }))).toBe(false);
+        expect(streetObjectsAuto({ streetObjects: true }, env({}))).toBe(true);
+    });
+
+    it('caps the automatic pass\'s families at the request\'s choice, else the environment\'s, else the default', () => {
+        expect(streetObjectsAutoMaxFamilies({}, env({}))).toBe(STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT);
+        expect(streetObjectsAutoMaxFamilies({}, env({ SCRATCHBOX_STAGED_STREET_OBJECTS_MAX_FAMILIES: '3' }))).toBe(3);
+        expect(streetObjectsAutoMaxFamilies({ streetObjectsMaxFamilies: 7 }, env({ SCRATCHBOX_STAGED_STREET_OBJECTS_MAX_FAMILIES: '3' }))).toBe(7);
+        // a non-positive or non-finite value from either source falls back to the default, never to 0 or unlimited
+        expect(streetObjectsAutoMaxFamilies({ streetObjectsMaxFamilies: 0 }, env({}))).toBe(STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT);
+        expect(streetObjectsAutoMaxFamilies({ streetObjectsMaxFamilies: -5 }, env({}))).toBe(STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT);
+        expect(streetObjectsAutoMaxFamilies({}, env({ SCRATCHBOX_STAGED_STREET_OBJECTS_MAX_FAMILIES: 'nope' }))).toBe(STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT);
+        expect(streetObjectsAutoMaxFamilies({ streetObjectsMaxFamilies: 4.7 }, env({}))).toBe(4);
     });
 
     it('the staged tool runs \'i\' as J with Trellis, takes a model service, and refuses the retired G and H', () => {
