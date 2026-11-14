@@ -11,8 +11,9 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { buildMeasuredTwin, GENERATED_REVEAL_M, measuredTwinSpec, rebasePath, type KRunRecords } from '../src/node/3d-engine/staged-location/measured-twin/measured-twin';
-import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { buildMeasuredTwin, ensureMeasuredTwinBinary, GENERATED_REVEAL_M, measuredTwinSpec, rebasePath, type KRunRecords } from '../src/node/3d-engine/staged-location/measured-twin/measured-twin';
+import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { execFileSync } from 'child_process';
 import { fileReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { enuOffset } from '../src/node/3d-engine/staged-location/measured-twin/infer';
 import { applyGlbExposure } from '../src/node/3d-engine/staged-location/measured-twin/exposure';
@@ -66,6 +67,50 @@ describe('measuredTwinSpec', () => {
     });
 });
 
+describe('the twin stands at the street level it is given', () => {
+    // a box 20 x 16 m and 40 m tall on a street at `ground`, its walls, roof and the street round it meshed at 1 m
+    function boxOnStreet(ground: number): Buffer {
+        const pos: number[] = [], idx: number[] = [];
+        const grid = (o: number[], u: number[], v: number[], nu: number, nv: number) => {
+            const base = pos.length / 3;
+            for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) for (let c = 0; c < 3; c++) pos.push(o[c] + u[c] * i / nu + v[c] * j / nv);
+            for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const a = base + j * (nu + 1) + i; idx.push(a, a + 1, a + nu + 2, a, a + nu + 2, a + nu + 1); }
+        };
+        const [x0, x1, z0, z1, h] = [-10, 10, -8, 8, 40];
+        grid([x0, ground, z0], [x1 - x0, 0, 0], [0, h, 0], 20, 40); grid([x1, ground, z0], [0, 0, z1 - z0], [0, h, 0], 16, 40);
+        grid([x1, ground, z1], [x0 - x1, 0, 0], [0, h, 0], 20, 40); grid([x0, ground, z1], [0, 0, z0 - z1], [0, h, 0], 16, 40);
+        grid([x0, ground + h, z0], [0, 0, z1 - z0], [x1 - x0, 0, 0], 16, 20); grid([-30, ground, -30], [0, 0, 60], [60, 0, 0], 30, 30);
+        const P = new Float32Array(pos), I = new Uint32Array(idx), bin = new Uint8Array(P.byteLength + I.byteLength);
+        bin.set(new Uint8Array(P.buffer), 0); bin.set(new Uint8Array(I.buffer), P.byteLength);
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < P.length; i++) { lo[i % 3] = Math.min(lo[i % 3], P[i]); hi[i % 3] = Math.max(hi[i % 3], P[i]); }
+        return assembleGlb({
+            asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, mode: 4 }] }],
+            accessors: [{ bufferView: 0, componentType: 5126, count: P.length / 3, type: 'VEC3', min: lo, max: hi }, { bufferView: 1, componentType: 5125, count: I.length, type: 'SCALAR' }],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: P.byteLength }, { buffer: 0, byteOffset: P.byteLength, byteLength: I.byteLength }], buffers: [{ byteLength: bin.byteLength }]
+        }, bin);
+    }
+
+    it('puts the base on the street and the top at the scan\'s top, whatever the level (once it stood a street level too high)', async () => {
+        const bin = await ensureMeasuredTwinBinary();
+        for (const ground of [0, 7, -4]) {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'twin-ground-'));
+            const isolate = path.join(dir, 'box.glb'), glb = path.join(dir, 'twin.glb'), report = path.join(dir, 'report.json'), spec = path.join(dir, 'spec.txt');
+            fs.writeFileSync(isolate, boxOnStreet(ground));
+            fs.writeFileSync(spec, measuredTwinSpec({ runDir: dir, orthosDir: dir, isolate, groundY: ground, loops: [], planes: [], windowFit: [], classes: [], photos: {}, reveal: { depthM: GENERATED_REVEAL_M, label: 'generated', source: 'test' } }, { glb, report }));
+            const answer = JSON.parse(execFileSync(bin, [spec], { maxBuffer: 16 * 1024 * 1024 }).toString().trim().split('\n').pop()!) as { ok: boolean; topM: number; tiers: number };
+            expect(answer.ok).toBe(true);
+            expect(answer.topM).toBeCloseTo(40, 0);
+            const json = parseGlbBytes(fs.readFileSync(glb)).json as any;
+            let lo = Infinity, hi = -Infinity;
+            for (const m of json.meshes) for (const p of m.primitives) { const a = json.accessors[p.attributes.POSITION]; lo = Math.min(lo, a.min[1]); hi = Math.max(hi, a.max[1]); }
+            expect(lo, `base at ground ${ground}`).toBeCloseTo(ground, 0);
+            expect(hi, `top at ground ${ground}`).toBeCloseTo(ground + 40, 0);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }, 600_000);
+});
+
 describe('rebasePath', () => {
     it('finds a recorded path under another cache root by its cache folders', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-'));
@@ -101,8 +146,11 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(rep.slender.fins).toBeGreaterThan(20);
         // the mast's overhang at 388 m: the scan's texels under it are black (never photographed); it takes its wall's colour
         expect(rep.colour.undersideFills).toBeGreaterThan(0);
-        // the ESB's arches are carved ornament over flat-topped windows: the opening reader draws no shaped head there
-        expect(rep.heads.drawn).toBe(0);
+        // the ESB's arches are carved ornament over flat-topped windows: the opening reader finds one head type there (11
+        // windows, a 0.16 m rise, just over headMinM) and draws at most one of them. With the twin one street level too
+        // high (0.29 m here) none of the 11 landed on a wall and none was drawn; at the right height one does
+        expect(rep.heads.types).toBeLessThanOrEqual(1);
+        expect(rep.heads.drawn).toBeLessThanOrEqual(1);
         // most kept boxes are punched; the rest were duplicates of overlapping photos or off every wall, and are counted
         expect(rep.windows.given).toBeGreaterThan(7000);
         expect(rep.windows.placed).toBeGreaterThan(5000);

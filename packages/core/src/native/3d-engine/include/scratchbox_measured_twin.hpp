@@ -707,6 +707,10 @@ inline Result build(Spec S) {
         rep.notes.push_back("street level not given: " + detail::num(S.groundY) + " (the commonest up-facing height near the scan's foot)");
     }
     sp::ScanResult R = sp::analyseScan(S.isolate, S.groundY, S.footprintXZ, {}, S.scan);
+    // analyseScan gives each tier's base and top in the tile frame, the street level included; everything below works in
+    // heights above the street and adds the level when it places a point. The level is taken out here, once: left in, a
+    // twin stood one street level too high (its base at twice the level), unseen only where the level is near zero
+    for (auto& t : R.tiers) { t.baseY -= S.groundY; t.topY -= S.groundY; }
     // the scan before its walls were flattened onto their planes: where a pier's step or a window's reveal still stands
     std::optional<sp::ScanResult> rawR;
     if (S.P.foldScan && !S.rawScan.empty()) { try { rawR = sp::analyseScan(S.rawScan, S.groundY, S.footprintXZ, {}, S.scan); } catch (const std::exception& e) { rep.notes.push_back(std::string("the unflattened scan could not be read (") + e.what() + "): depths read from the flattened one"); } }
