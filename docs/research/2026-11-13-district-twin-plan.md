@@ -69,7 +69,7 @@ preregistration for this.
 |---|---|---|
 | Street-level podiums and entrances come out as coarse blocks | every twin so far (ESB, Penn 2) | the scan's surface kept for the lowest storeys (method 3) |
 | Roofs drawn as one colour, roof plant lost | the trial's large roof | the scan's surface kept above the parapet line (method 3) |
-| A raw scan cut-out merged beside twins comes out scrambled | the trial, run 2 | never merge a compacted cut-out; an untwinned building stays in the ground layer, where it already is |
+| A cut scan renders with scrambled triangles where the cut was | the Penn trial's run 2; the ESB layered trial | the cut functions (`hideFootprintInGlb`, `joinChunkGlb`) leave primitives whose index list is empty, and the path tracer draws such a primitive as if it had no index list (its vertices in order). Dropping the empty primitives after the cut removes it. To be fixed where it is made, not worked round |
 | Twins heavier than the scan | the trial: 44.7 MB against 23.5 MB for nine | few twins a district now; JPEG atlases for those |
 | Overlapping window readings dropped | Penn 2: 543 of 2,954 | merge readings per wall before the generator (the structure intent's wall lattices); only if the sheets show gaps |
 | The twin's base is open underneath | judge renders at Penn 2 | closed by the kept street-level scan |
@@ -190,10 +190,11 @@ What the renders show:
 
 ### The stray triangles, found (same day)
 
-They were not the twin generator's. Every twin's geometry is clean (no slanted surface in any of them), and so is the
-ground layer. They came from the one building whose second pass failed: the driver merged that building's raw scan
-cut-out into the district, and a compacted cut-out merged beside the twins comes out with its triangles scrambled.
-Rendering the district without that one file removed every stray triangle.
+They were not the twin generator's. Every twin's geometry is clean (no slanted surface in any of them). They came
+from the one building whose second pass failed: the driver merged that building's raw scan cut-out into the district,
+and rendering the district without that one file removed every stray triangle. (The cut-out was not scrambled by the
+merge, as first written here: the later ESB trial found the real cause, the empty primitives a cut leaves, which the
+path tracer draws without their index list.)
 
 The driver now steps down one rung instead: a building whose second pass fails keeps its first-pass twin (no windows),
 and no raw cut-out is merged. Run 4: 9 twins (one on its first pass), 1,226 windows, 34 s, 44.7 MB, no stray
@@ -215,6 +216,31 @@ What the trial says about the approach: from the views rendered, the district tw
 its walls carry the scan's own photo. It is cleaner at the edges and stands on true levels, and it costs twice the
 size and the roofs. On this evidence a district of twins is not yet an improvement over the scan at district distance.
 
+
+## The layered combination, tried at the Empire State Building (2026-11-13)
+
+The method above, composed once from cached files with no model calls: the ESB district's scan (run 493d1ee7's tile),
+pipeline K's colour steps on it, the ESB's scan cut out by its Google footprint (`hideFootprintInGlb`), and the hybrid
+twin that was judged on 2026-11-08 placed in its stead.
+
+| Layer | What ran | Result |
+|---|---|---|
+| 1. The scan | the tile as extracted | 20 MB |
+| 2. Colour | roof-shadow lift and photo harmonising on the whole district (`correctedScanTexture`) | 50 s; 16,405 m2 of roof and terrace shadow lifted on 147 photos; seams 0.381 to 0.327; 30 MB |
+| 3. The twin | 76,201 scan triangles of the ESB removed, the street under it kept; the twin merged in | under 1 s; 60 MB |
+
+By eye, from four rendered views (scan, scan with colour, layered):
+
+- **The shaft is better as the twin.** Straight piers and even bays where the scan's walls waver; it sits in the
+  scanned district with no gap or step at its foot.
+- **The crown is worse as the twin.** Loose fins and fragments at the foot of the mast, and the observation level is
+  blurrier than the scan's. This is the case for method 3 (the twin keeps the scan's roof).
+- **The colour layer is a small change** at these views: shadowed roofs read a little lighter. It does no harm.
+- **Three times the scan's size** for one building twinned.
+
+On the way, the cause of the "stray triangles" in both trials was found and is not what the Penn section first said:
+it is the empty primitives a cut leaves (see the table of known problems). At Penn the twins were clean all along, and
+the ground layer's "scraps" seen there were the same fault.
 
 ## What this plan does not claim
 
