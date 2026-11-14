@@ -19,7 +19,7 @@ import { windowSourceOf, WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { FACADE_READER_PARAMS, FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
+import { FACADE_READER_PARAMS, FACADE_READER_VERSION, LINE_GUIDE_NOTE, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { contextFor, parseBrief, planePlaces } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-brief';
 import { exemplarOf, matchExemplar, templateColumns } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-template';
@@ -87,6 +87,26 @@ function checkOpenings(rects: Array<[number, number, number, number]>, tol: numb
 }
 
 describe('pipeline K facade reader (vision agent)', () => {
+    it('lays the plane\'s line drawing beside its photo for the zones, and keys that answer apart', async () => {
+        const seen: Array<{ kind: string; images: number; prompt: string }> = [];
+        const base = standIn();
+        const ask: FacadeAsk = async (png, prompt, kind, region, regions) => { seen.push({ kind, images: Array.isArray(png) ? png.length : 1, prompt }); return base.ask(png, prompt, kind, region, regions); };
+        const lines = async (scale: number) => { const w = Math.round(W * scale), h = Math.round(H * scale); return encodePng(w, h, new Uint8Array(w * h * 3).fill(255), 3); };
+        const store = new Map<string, unknown>();
+        const memory = { store: { get: async <T>(k: string) => store.get(k) as T | undefined, put: (k: string, v: unknown) => { store.set(k, v); } }, model: 'stand-in', plane: 'p7' };
+        const r = await readFacade(facade(), undefined, frame, ask, FACADE_READER_PARAMS, undefined, undefined, '', memory as never, undefined, lines);
+        expect(r.record.outcome).toBe('replaced');
+        // the overview carries both images and the note on what the second is; the readings and the judge only the photo
+        const ov = seen.find(c => c.kind === 'overview')!;
+        expect(ov.images).toBe(2);
+        expect(ov.prompt).toContain(LINE_GUIDE_NOTE);
+        for (const c of seen.filter(x => x.kind !== 'overview')) { expect(c.images).toBe(1); expect(c.prompt).not.toContain(LINE_GUIDE_NOTE); }
+        // the same plane without the drawing is not answered from the guided overview kept above: it is asked again
+        seen.length = 0;
+        await readFacade(facade(), undefined, frame, ask, FACADE_READER_PARAMS, undefined, undefined, '', memory as never);
+        expect(seen.filter(c => c.kind === 'overview').map(c => c.images)).toEqual([1]);
+    });
+
     it('reads the zones, tiles the unit cell down its zone at the measured pitch, two panes an opening', async () => {
         const { ask, calls } = standIn();
         const r = await readFacade(facade(), undefined, frame, ask);

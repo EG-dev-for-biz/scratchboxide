@@ -99,7 +99,7 @@ import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult }
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScores, visibleDefects } from './remesh-scores';
 import { decodeJpegInMemory } from './photo-palette';
-import { FACADE_LATTICE_VERSION, type ReliefFacade } from './facade-lattice';
+import { FACADE_LATTICE_VERSION, glbSoup, type ReliefFacade } from './facade-lattice';
 import { wallSampleIndex } from './wall-plane-fit';
 import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
 import { objectInputHash } from '../../asset-store/scene-object-store';
@@ -4722,7 +4722,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const geometryAsk = readerOn ? facadeReaderAsk(io.signal, 'remesh') : undefined;
                             const geometryReadings = bypass('remesh') ? undefined : modelReadingsStore();
                             const readerReuse = reuse?.first.reader && fitReused.size ? { file: reuse.first.reader, ids: new Set(fitReused.keys()) } : undefined;
-                            const geometryRead = geometryAsk ? timed('facadeRead', () => readPlanes(k.orthosDir, geometryAsk, { signal: io.signal, progress: m => io.progress(`pipeline K: ${m}`), building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}), ...(readerReuse ? { reuse: readerReuse } : {}) })) : undefined;
+                            // opt-in (SCRATCHBOX_K_LINE_GUIDE=1): each plane's line drawing from the cut-out scan goes with its overview,
+                            // so the reader's zones follow the structure (building-line-drawing.ts renderPlaneLines)
+                            const lineGuide = readerOn && process.env.SCRATCHBOX_K_LINE_GUIDE?.trim() === '1' && r.clayGlb && fs.existsSync(r.clayGlb) ? { soup: glbSoup(parseGlbBytes(fs.readFileSync(r.clayGlb))) } : undefined;
+                            const geometryRead = geometryAsk ? timed('facadeRead', () => readPlanes(k.orthosDir, geometryAsk, { signal: io.signal, progress: m => io.progress(`pipeline K: ${m}`), building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}), ...(readerReuse ? { reuse: readerReuse } : {}), ...(lineGuide ? { lineGuide } : {}) })) : undefined;
                             // awaited after the window fit; a failure is handled there
                             geometryRead?.catch(() => undefined);
                             if (!geometryRead) logStep('remesh.facadeRead', 'skipped');

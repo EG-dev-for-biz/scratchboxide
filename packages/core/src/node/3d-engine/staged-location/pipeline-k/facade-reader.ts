@@ -59,6 +59,7 @@ import { kNative } from './native/native-switch';
 import { matchExemplarsNative } from './native/template-match-native';
 import { readOccludedAsync, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
+import { renderPlaneLines, type PlaneOrthoFrame } from '../building-line-drawing';
 
 export const FACADE_READER_VERSION = 'facade-reader/15';
 /** The prompts' version, in every kept reading's key (with the prompt's own text): a change to what is asked asks again. */
@@ -158,6 +159,12 @@ export interface FacadeReadRecord {
 const where = (widthM: number, heightM: number, roof: boolean, part: boolean) => roof
     ? `This is a photo of ${part ? 'part of ' : ''}a flat roof or terrace of a building seen from straight above, straightened from a 3D scan's photo texture: ${widthM.toFixed(1)} m by ${heightM.toFixed(1)} m. Black or uniform grey areas are not covered.`
     : `This is a fronto-parallel photo of ${part ? 'part of ' : ''}a building wall, straightened from a 3D scan's photo texture: ${widthM.toFixed(1)} m wide and ${heightM.toFixed(1)} m tall, up is up. Uniform grey or black areas are not covered.`;
+
+/**
+ * Told with the overview when the plane's line drawing goes with its photo (readPlanes `lineGuide`): what the second
+ * image is, so the zones are split where the structure changes, not where the light does.
+ */
+export const LINE_GUIDE_NOTE = 'The second image is a line drawing of the same plane at the same framing and scale, drawn from the 3D scan\'s geometry: black lines are its outline and the edges where its surfaces meet at an angle (setbacks, ledges, cornices, corners, piers standing out), grey lines its open edges. A change of structure shows there; a change of light or a stain does not. Use it to place zone boundaries where the structure changes; read the openings from the photo.';
 
 export function overviewPrompt(widthM: number, heightM: number, roof = false): string {
     return [
@@ -601,7 +608,7 @@ function asker(ask: FacadeAsk, memory: ReadingMemory | undefined, tally: CallTal
  * answer kept for the same question about the same photo is given back instead of a call; `tally` counts both (a
  * plane's template attempt and its reading share one).
  */
-export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, guide?: { pitchM: number } | Promise<{ pitchM: number } | undefined>, context = '', memory?: ReadingMemory, tally: CallTally = { calls: 0, reused: 0 }): Promise<{ record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; exemplars?: WindowExemplar[] }> {
+export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, guide?: { pitchM: number } | Promise<{ pitchM: number } | undefined>, context = '', memory?: ReadingMemory, tally: CallTally = { calls: 0, reused: 0 }, /** The plane's line drawing at a scale (readPlanes `lineGuide`): sent with the overview, after the photo. */ lines?: (scale: number) => Promise<Buffer | undefined>): Promise<{ record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; exemplars?: WindowExemplar[] }> {
     const t0 = Date.now(), W = img.width, H = img.height, roof = f.kind === 'roof';
     const rec = (outcome: FacadeReadRecord['outcome'], why: string, zones?: ZoneRecord[]): FacadeReadRecord => ({ facadeId: f.facadeId, outcome, why, ...(zones ? { zones } : {}), calls: tally.calls, ...(tally.reused ? { reused: tally.reused } : {}), ms: Date.now() - t0 });
     const L = luminanceOf(img, uncovered);
@@ -617,8 +624,11 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
     if (H <= cropPx * 1.25) zones = [{ region: whole }];
     else {
         let parsed: ReturnType<typeof parseZones>;
-        const scale = Math.min(1, scaleFor(whole, P)), bare = overviewPrompt(W * f.pixel, H * f.pixel, roof);
-        try { parsed = parseZones(await call({ kind: 'overview', n: 1, png: async () => (await regionPng(img, whole, scale, [], L)).png, bare, told: told(bare), region: whole, about: [whole, scale] })); }
+        const scale = Math.min(1, scaleFor(whole, P));
+        // with the plane's line drawing, sent after the photo at the same framing and scale, and the note on what it is
+        const linePng = lines ? await lines(scale).catch(() => undefined) : undefined;
+        const bare = linePng ? `${overviewPrompt(W * f.pixel, H * f.pixel, roof)}\n${LINE_GUIDE_NOTE}` : overviewPrompt(W * f.pixel, H * f.pixel, roof);
+        try { parsed = parseZones(await call({ kind: 'overview', n: 1, png: async () => { const photo = (await regionPng(img, whole, scale, [], L)).png; return linePng ? [photo, linePng] : photo; }, bare, told: told(bare), region: whole, about: linePng ? [whole, scale, 'lines', crypto.createHash('sha256').update(linePng).digest('hex')] : [whole, scale] })); }
         catch (err) { return { record: rec('failed', `the overview failed: ${errText(err)}`.slice(0, 300)) }; }
         if (parsed.conf < P.minConf) return { record: rec('kept', `the model was unsure of the plane's zones (${parsed.conf})`) };
         zones = parsed.zones.filter(z => z.openings).slice(0, P.maxZones).map(z => ({ region: { x0: Math.floor((z.box[0] / 1000) * W), y0: Math.floor((z.box[1] / 1000) * H), x1: Math.ceil((z.box[2] / 1000) * W), y1: Math.ceil((z.box[3] / 1000) * H) }, ...(z.label ? { label: z.label } : {}) }));
@@ -821,6 +831,8 @@ export interface PlaneReading { facadeId: number; width: number; height: number;
 
 export interface FacadeReaderFile {
     version: string; params: FacadeReaderParams; ms: number; facades: FacadeReadRecord[];
+    /** Each plane's line drawing from the scan went with its overview (readPlanes `lineGuide`). */
+    lineGuide?: boolean;
     /** The planes past maxPlanes, not read, and their covered area. */
     unread: { planes: number; areaM2: number };
     /** The planes whose openings were drawn. */
@@ -855,12 +867,12 @@ function callLimiter(n: number): <T>(fn: () => Promise<T>) => Promise<T> {
  * returned as it is. The judged overlays are kept in facade_reader/ for review. With `readings`, every answer is kept
  * in that store and a question asked before about the same photo is answered from it (readFacade).
  */
-export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { signal?: AbortSignal; params?: FacadeReaderParams; progress?: (m: string) => void; /** The building the request named, told to the brief and every reading. */ building?: NamedBuilding; /** Where answers are kept between builds, and the model they are asked of (model-readings.ts). */ readings?: { store: ModelReadingStore; model: string }; /** A plane's key in the store in place of its own pixels' (planePixelsKey): the twin reader keys a facade by its straightened photo, which is the same build to build while the harmonised texture drifts (twin-reader.ts). None: the pixels'. */ planeKey?: (f: { facadeId: number; image: string }) => string | undefined; /** Planes whose reading is taken as it is from an earlier reading of the same building (the first pass's, for the facades the ownership vote left unchanged: facade-reuse.ts), with its brief: they are not read again and no brief is asked for. */ reuse?: { file: FacadeReaderFile; ids: ReadonlySet<number> } } = {}): Promise<{ records: FacadeReaderFile; cached: boolean }> {
+export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { signal?: AbortSignal; params?: FacadeReaderParams; progress?: (m: string) => void; /** The building the request named, told to the brief and every reading. */ building?: NamedBuilding; /** Where answers are kept between builds, and the model they are asked of (model-readings.ts). */ readings?: { store: ModelReadingStore; model: string }; /** A plane's key in the store in place of its own pixels' (planePixelsKey): the twin reader keys a facade by its straightened photo, which is the same build to build while the harmonised texture drifts (twin-reader.ts). None: the pixels'. */ planeKey?: (f: { facadeId: number; image: string }) => string | undefined; /** Planes whose reading is taken as it is from an earlier reading of the same building (the first pass's, for the facades the ownership vote left unchanged: facade-reuse.ts), with its brief: they are not read again and no brief is asked for. */ reuse?: { file: FacadeReaderFile; ids: ReadonlySet<number> }; /** The scan (a triangle soup in the planes' frame): each plane's line drawing (building-line-drawing.ts renderPlaneLines) goes with its overview, so its zones follow the structure (SCRATCHBOX_K_LINE_GUIDE=1). */ lineGuide?: { soup: Float32Array } } = {}): Promise<{ records: FacadeReaderFile; cached: boolean }> {
     const P = opts.params ?? FACADE_READER_PARAMS;
     const recFile = path.join(orthosDir, FACADE_READER_FILE);
     if (fs.existsSync(recFile)) {
         const prior = JSON.parse(fs.readFileSync(recFile, 'utf8')) as FacadeReaderFile;
-        if (prior.version === FACADE_READER_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && Array.isArray(prior.readings)) return { records: prior, cached: true };
+        if (prior.version === FACADE_READER_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && Array.isArray(prior.readings) && !!prior.lineGuide === !!opts.lineGuide) return { records: prior, cached: true };
     }
     const t0 = Date.now();
     // the walls tile_refine photographed (facades.json), then every other plane of the building (plane-orthos.ts: roofs,
@@ -970,7 +982,16 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                     await st.done;
                     if (st.exemplars.length) r = await readFromTemplates(img, uncovered, f, { name: fam.name, exemplars: st.exemplars, ...(st.density !== undefined ? { density: st.density } : {}) }, limited, P, review, memory, tally);
                 }
-                r ??= await readFacade(img, uncovered, f, limited, P, review, wide(f) ? undefined : guideRead, P.brief ? contextFor(brief, places.get(f.facadeId), fam, opts.building) : '', memory, tally);
+                // the plane's line drawing from the scan, in its ortho frame at the overview's scale (written beside the reviews)
+                const soup = opts.lineGuide?.soup, frame = f as unknown as Partial<PlaneOrthoFrame>;
+                const lines = soup && frame.centroid && frame.normal && frame.axisS && frame.axisT ? async (scale: number) => {
+                    const dr = renderPlaneLines(soup, frame as PlaneOrthoFrame, scale);
+                    if (!dr || !dr.drawn) return undefined;
+                    const png = await encodePngAsync(dr.width, dr.height, (() => { const o = new Uint8Array(dr.width * dr.height * 4); for (let k = 0; k < dr.width * dr.height; k++) { o[4 * k] = dr.rgb[3 * k]; o[4 * k + 1] = dr.rgb[3 * k + 1]; o[4 * k + 2] = dr.rgb[3 * k + 2]; o[4 * k + 3] = 255; } return o; })(), 4);
+                    review(png, 'lines');
+                    return png;
+                } : undefined;
+                r ??= await readFacade(img, uncovered, f, limited, P, review, wide(f) ? undefined : guideRead, P.brief ? contextFor(brief, places.get(f.facadeId), fam, opts.building) : '', memory, tally, lines);
                 if (fam) r.record.family = fam.name;
                 if (isLead && r.exemplars && r.rects) { st!.exemplars = r.exemplars; st!.density = r.rects.length / Math.max(1, coveredAreaM2(luminanceOf(img, uncovered), f.pixel)); }
                 records.push(r.record);
@@ -986,7 +1007,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
     records.sort((a, b) => a.facadeId - b.facadeId);
     readings.sort((a, b) => a.facadeId - b.facadeId);
     const calls: CallTally = { calls: briefCalls.calls + records.reduce((a, r) => a + (r.calls ?? 0), 0), reused: briefCalls.reused + records.reduce((a, r) => a + (r.reused ?? 0), 0) };
-    const file: FacadeReaderFile = { version: FACADE_READER_VERSION, params: P, ms: Date.now() - t0, facades: records, unread, readings, ...(guide ? { guide } : {}), ...(briefNote ? { brief: briefNote } : {}), calls, ...(reusedIds.size ? { reusedPlanes: reusedIds.size } : {}) };
+    const file: FacadeReaderFile = { version: FACADE_READER_VERSION, params: P, ...(opts.lineGuide ? { lineGuide: true } : {}), ms: Date.now() - t0, facades: records, unread, readings, ...(guide ? { guide } : {}), ...(briefNote ? { brief: briefNote } : {}), calls, ...(reusedIds.size ? { reusedPlanes: reusedIds.size } : {}) };
     fs.writeFileSync(recFile, JSON.stringify(file));
     return { records: file, cached: false };
 }

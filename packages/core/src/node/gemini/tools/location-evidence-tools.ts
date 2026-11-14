@@ -22,6 +22,7 @@ import { RESIDUAL_AUDIT_TOOL_DECLARATION, residualAuditHandler } from './locatio
 import { FIT_OBJECT_TOOL_DECLARATION, fitObjectHandler } from './location-evidence/fit-object';
 import { GRASS_MAP_TOOL_DECLARATION, grassMapHandler } from './location-evidence/grass-map';
 import { STREET_OBJECTS_TOOL_DECLARATION, streetObjectsHandler } from './location-evidence/street-objects';
+import { BUILDING_LINE_DRAWING_TOOL_DECLARATION, buildingLineDrawingHandler } from './location-evidence/building-line-drawing';
 
 export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     BUILDING_SHAPE_TOOL_DECLARATION,
@@ -32,7 +33,8 @@ export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     RESIDUAL_AUDIT_TOOL_DECLARATION,
     FIT_OBJECT_TOOL_DECLARATION,
     GRASS_MAP_TOOL_DECLARATION,
-    STREET_OBJECTS_TOOL_DECLARATION
+    STREET_OBJECTS_TOOL_DECLARATION,
+    BUILDING_LINE_DRAWING_TOOL_DECLARATION
 ];
 
 export const locationEvidenceHandlers: Record<string, ToolHandler> = {
@@ -44,5 +46,6 @@ export const locationEvidenceHandlers: Record<string, ToolHandler> = {
     [RESIDUAL_AUDIT_TOOL_DECLARATION.name]: residualAuditHandler,
     [FIT_OBJECT_TOOL_DECLARATION.name]: fitObjectHandler,
     [GRASS_MAP_TOOL_DECLARATION.name]: grassMapHandler,
-    [STREET_OBJECTS_TOOL_DECLARATION.name]: streetObjectsHandler
+    [STREET_OBJECTS_TOOL_DECLARATION.name]: streetObjectsHandler,
+    [BUILDING_LINE_DRAWING_TOOL_DECLARATION.name]: buildingLineDrawingHandler
 };
