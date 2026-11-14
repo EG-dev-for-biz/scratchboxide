@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { preparedKey, resolveRegionSets } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
+import { capGrain, GRAIN_CAP_UNMEASURED, preparedKey, resolveRegionSets } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 import { memoryReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import type { RegionClass } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
@@ -48,6 +48,14 @@ function library(): { root: string; store: ReturnType<typeof memoryReadingStore>
 const dark: RegionClass = { index: 0, meanLab: [49.5, 0, 0], meanLinear: [GREY, GREY, GREY], spreadLab: [1, 0, 0], share: 1, wall: true };
 
 describe('pipeline K library sets', () => {
+    it("holds the regressor's grain to what the photo bears out, and an unmeasured class to the others' median", () => {
+        expect(capGrain(0.85, [0.01, 0.01, 0.01], [0.04, 0.04, 0.04], [])).toEqual({ grain: 0.5, cap: 0.5, by: 'photo' });
+        expect(capGrain(0.85, [0.05, 0.05], [0.04, 0.04], []).grain).toBe(0.85);
+        expect(capGrain(0.9, undefined, undefined, [0.2, 0.6, NaN, 0.4])).toEqual({ grain: 0.4, cap: 0.4, by: 'other classes' });
+        expect(capGrain(0.9, undefined, [0.1], [])).toEqual({ grain: GRAIN_CAP_UNMEASURED, cap: GRAIN_CAP_UNMEASURED, by: 'none measured' });
+        expect(capGrain(0.3, undefined, undefined, []).grain).toBe(0.3);
+    });
+
     it("ranks every class toward its read finish, else matte, and draws the set it takes with all its maps", async () => {
         const { root, store } = library();
         const progress: string[] = [];

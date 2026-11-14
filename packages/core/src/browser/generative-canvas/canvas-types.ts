@@ -30,6 +30,7 @@ export function getActiveUserName(customName?: string): string {
 import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
 import type { SplatEditStroke } from '../../common/spatial/splat-edits';
 import type { StagedBuildState } from '../../common/spatial/staged-location-contracts';
+import type { SceneProposal } from './services/scene-proposals';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
@@ -1200,6 +1201,20 @@ export interface Scene3DData {
         keepPoseOnLoad?: boolean;
     };
     /**
+     * The cameras the scene was built for, as its script declared them (sb.shot): position and target in metres, the
+     * lens in millimetres, the frame in pixels and the detail budget in pixels. The first is the one `camera` opens on.
+     */
+    shots?: Array<{
+        name: string;
+        position: [number, number, number];
+        target: [number, number, number];
+        focalMm: number;
+        sensorWidthMm: number;
+        aspect: number;
+        widthPx: number;
+        detailPx: number;
+    }>;
+    /**
      * The scene's weather (the viewport's Weather tool, the graph's Weather node): time of day, date, cloud cover, haze and
      * fog, turned into the sky config by services/atmosphere/scene-weather.ts applySceneWeather; absent = no weather set.
      */
@@ -1291,6 +1306,14 @@ export interface Scene3DData {
         isLooping?: boolean;
         tracks?: TimelineTrack[];
         animationClip?: any;
+        /**
+         * A camera move (sb.camera_move): keyed poses in metres and millimetres; the viewport drives its camera from the
+         * move while the timeline plays or is scrubbed (common/spatial/camera-path.ts cameraPoseAt).
+         */
+        camera?: {
+            name?: string;
+            keys: Array<{ timeMs: number; position: [number, number, number]; target: [number, number, number]; focalMm: number; sensorWidthMm?: number; aspect?: number }>;
+        };
     };
     customScript?: string;
     code?: string;
@@ -1410,6 +1433,8 @@ export interface Scene3DData {
             fogDensity?: number;
             fogBaseAltitude?: number;
             fogHeight?: number;
+            /** A grey haze of this visibility at ground level, in metres; thinned with height by fogHeight. */
+            hazeVisibilityMeters?: number;
             albedoScale?: number;
 
             // Terrain Cloud Shadows
@@ -1670,6 +1695,7 @@ export type StudioSettingsTab =
     | 'memories'
     | 'shortcuts'
     | 'admin'
+    | 'account'
     | 'about';
 export type StudioLayoutMode = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | 'canvas' | '3d' | 'browser' | 'video';
 
@@ -1720,6 +1746,10 @@ export interface InteractiveQuestionCardData {
     questions: InteractiveQuestionItem[];
     submitted?: boolean;
     selectedOptions?: Record<string, string[]>;
+    /** A map to pick a place on (common/spatial/place-picker.ts), shown above the questions. */
+    placePicker?: import('../../common/spatial/place-picker').PlacePickerRequest;
+    /** The place the user picked on that map, kept once the card is submitted. */
+    pickedPlace?: import('../../common/spatial/place-picker').PlacePick;
 }
 
 export interface ExecutionPlanStep {
@@ -1890,12 +1920,16 @@ export interface ChatSession {
     artifactHistory: CanvasArtifact[];
     /** 3D scenes this session has made a node graph for (or that were here before it did): never made twice. */
     nodeGraphsFor?: string[];
+    /** Agent edits to an open 3D scene waiting for Accept / Reject, one per scene (services/scene-proposals.ts). */
+    sceneProposals?: SceneProposal[];
     layoutMode?: StudioLayoutMode;
     fileType?: WorkspaceFileType;
     workspaceId?: string;
     workspaceName?: string;
     relativeTime?: string;
     viewState?: SessionViewState;
+    /** The model this chat's agent runs on (Gemini, Claude or OpenAI: common/chat-models.ts); unset, the default. */
+    chatModel?: string;
 }
 
 export interface PromptSuggestion {

@@ -11,6 +11,71 @@
 import * as React from 'react';
 import { IconGlobe } from '../../canvas-icons';
 import { useSettingsContext } from '../SettingsContext';
+import { CHAT_MODEL_OPTIONS, CHAT_PROVIDER_LABEL } from '../../../../common/chat-models';
+import { GeminiClient } from '../../gemini-client';
+
+/**
+ * Keys for the chat's Claude and OpenAI models. Saved on the server's encrypted key store (never shown again, never
+ * sent back to the browser); the chat's model picker marks a provider that has none.
+ */
+const ProviderKeysSection: React.FC = () => {
+    const [configured, setConfigured] = React.useState<Record<'anthropic' | 'openai', boolean | undefined>>({ anthropic: undefined, openai: undefined });
+    const [inputs, setInputs] = React.useState({ anthropic: '', openai: '' });
+    const [feedback, setFeedback] = React.useState<{ message: string; error?: boolean }>();
+    const load = React.useCallback(() => {
+        void GeminiClient.getInstance().listChatModels().then(r => {
+            const has = (p: 'anthropic' | 'openai') => r.models.find(m => m.provider === p)?.configured;
+            setConfigured({ anthropic: has('anthropic'), openai: has('openai') });
+        });
+    }, []);
+    React.useEffect(load, [load]);
+    const save = async (provider: 'anthropic' | 'openai', clear = false) => {
+        const res = await GeminiClient.getInstance().saveProviderKey(provider, clear ? '' : inputs[provider].trim());
+        if (!res.success) {
+            setFeedback({ message: `The server did not take the ${CHAT_PROVIDER_LABEL[provider]} key: ${res.error}`, error: true });
+            return;
+        }
+        setInputs(prev => ({ ...prev, [provider]: '' }));
+        setConfigured(prev => ({ ...prev, [provider]: res.configured }));
+        setFeedback({ message: clear
+            ? `${CHAT_PROVIDER_LABEL[provider]} key cleared${res.configured ? ' (a key from the secrets file still applies)' : ''}.`
+            : `${CHAT_PROVIDER_LABEL[provider]} key saved on the server.` });
+    };
+    return (
+        <div className="sb-cursor-section-block">
+            <div className="sb-cursor-section-header">Claude &amp; OpenAI API Keys (chat models)</div>
+            <div className="sb-cursor-group-card p-4 space-y-4">
+                <div className="sb-cursor-row-desc">
+                    The chat agent can run on Claude or OpenAI models with the same tools; pick the model per chat in the composer.
+                    Image, video and vision tools keep using Google's services. A key here comes before ANTHROPIC_API_KEY / OPENAI_API_KEY in ~/.scratchbox/secrets.json.
+                </div>
+                {(['anthropic', 'openai'] as const).map(provider => (
+                    <div key={provider} className="sb-form-group">
+                        <label className="sb-form-label">
+                            {CHAT_PROVIDER_LABEL[provider]} API key{' '}
+                            <span className={`sb-badge-unified ${configured[provider] ? 'sb-badge-emerald' : 'sb-badge-zinc'}`}>
+                                {configured[provider] === undefined ? '…' : configured[provider] ? 'Configured' : 'Not configured'}
+                            </span>
+                        </label>
+                        <div className="flex gap-2">
+                            <input
+                                type="password"
+                                className="sb-form-input flex-1"
+                                autoComplete="off"
+                                placeholder={provider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
+                                value={inputs[provider]}
+                                onChange={e => setInputs(prev => ({ ...prev, [provider]: e.target.value }))}
+                            />
+                            <button type="button" className="sb-btn sb-btn-primary sb-btn-sm" disabled={!inputs[provider].trim()} onClick={() => void save(provider)}>Save</button>
+                            <button type="button" className="sb-btn sb-btn-sm" onClick={() => void save(provider, true)}>Clear</button>
+                        </div>
+                    </div>
+                ))}
+                {feedback && <div className={`text-xs ${feedback.error ? 'text-red-400' : 'text-emerald-400'}`}>{feedback.message}</div>}
+            </div>
+        </div>
+    );
+};
 
 export const ModelsTab: React.FC = () => {
     const {
@@ -53,17 +118,22 @@ export const ModelsTab: React.FC = () => {
 
                     <div className="grid grid-cols-2 gap-4">
                         <div className="sb-form-group">
-                            <label className="sb-form-label">Preferred AI Reasoning Engine</label>
+                            <label className="sb-form-label">Default chat model (each chat can pick its own in the composer)</label>
                             <select
                                 className="sb-form-select"
                                 value={workspaceSettings.defaultModel || 'gemini-4-argon'}
                                 onChange={e => setWorkspaceSettings({ ...workspaceSettings, defaultModel: e.target.value })}
                             >
-                                <option value="gemini-4-argon">Flagship Reasoning Engine (Gemini 4 Argon)</option>
-                                <option value="gemini-3.8-flash">High Reasoning Engine (Gemini 3.8 Flash)</option>
-                                <option value="gemini-3.7-flash">Previous Reasoning Engine (Gemini 3.7 Flash)</option>
-                                <option value="gemini-2.5-pro">Deep Architecture Analysis (Comprehensive Context)</option>
-                                <option value="gemini-2.5-flash">Fast Intelligence (Instant Code &amp; Generation)</option>
+                                {(['gemini', 'anthropic', 'openai'] as const).map(provider => (
+                                    <optgroup key={provider} label={CHAT_PROVIDER_LABEL[provider]}>
+                                        {CHAT_MODEL_OPTIONS.filter(m => m.provider === provider).map(m => (
+                                            <option key={m.id} value={m.id}>{m.label} ({m.description})</option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                                <option value="gemini-3.7-flash">Gemini 3.7 Flash (previous reasoning model)</option>
+                                <option value="gemini-2.5-pro">Gemini 2.5 Pro (comprehensive context)</option>
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash (fast)</option>
                             </select>
                         </div>
 
@@ -107,6 +177,8 @@ export const ModelsTab: React.FC = () => {
                     </div>
                 </div>
             </div>
+
+            <ProviderKeysSection />
 
             {/* Live Search Grounding */}
             <div className="sb-cursor-section-block">

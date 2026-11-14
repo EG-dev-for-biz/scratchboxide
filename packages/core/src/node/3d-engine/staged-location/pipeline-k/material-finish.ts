@@ -38,7 +38,7 @@
 import type { RegionClass } from './material-regions';
 import { ARTIST_FINISH, pbrReferenceLines, referenceRange } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_FINISH_VERSION = 'material-finish/6';
+export const MATERIAL_FINISH_VERSION = 'material-finish/7';
 
 export const FINISH_READ = {
     /** A reading's roughness and metalness rank the class's sets, and set its drawn finish, at this confidence (0..100) and above. */
@@ -196,7 +196,14 @@ export function finishTarget(f: ClassFinish | undefined, matte: { roughness: num
 }
 
 /** What finishMaps drew: the mean roughness and metalness, the share of the set's normal relief kept, and of its grain. */
-export interface DrawnFinish { roughness: number; metallic: number; relief: number; grain: number }
+export interface DrawnFinish {
+    roughness: number; metallic: number; relief: number; grain: number;
+    /** The roughness pattern's relative spread (std over mean) at the facade texel as drawn, and the ceiling the photo's tone set for it when one was given (material-sets.ts): the pattern was scaled down to it when above. */
+    roughnessSpread?: number; roughnessCeiling?: number;
+}
+
+/** What holds a set's roughness pattern (finishMaps): the photo's relative tone deviation at the facade texel, and the tile's size in facade texels. */
+export interface RoughnessHold { maxRelStd: number; texels: [number, number] }
 
 /**
  * How far a set's own pattern fits the element its class repeats on (RegionClass.repeatM, metres; the set's tile its real
@@ -238,7 +245,7 @@ export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | 
  * keeps its mean. The occlusion, roughness and metalness variation is drawn as far as the relief is (`relief`): a surface
  * read smooth is drawn even as well as flat. Returns new images (the inputs when nothing changes).
  */
-export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, grain = 1, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
+export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, grain = 1, R = FINISH_READ, hold?: RoughnessHold): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
     const sure = !!f && f.conf >= R.minConf;
     const n = orm.width * orm.height;
     let g = 0, b = 0;
@@ -256,11 +263,31 @@ export function finishMaps(orm: { width: number; height: number; rgba: Uint8Arra
     let a = 0;
     for (let k = 0; k < n; k++) a += orm.rgba[k * 4];
     const aMean = a / n / 255;
-    // the deviation scaled with the mean (a set's grain is proportional to its level), then by the pattern to draw
+    // occlusion and metalness: the deviation scaled with the mean (proportional to the level), then by the pattern to draw
     const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + relief * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
+    // roughness: the deviation shrinks in proportion when the set is drawn smoother than itself (a glass read is even) but
+    // is never amplified when drawn rougher (MAIN's verdict on PR #191, 2026-11-08: a polished travertine's pores, mean
+    // 0.06, drawn at a matte 0.7 came out twelve times their contrast and repeated as a checker); then, when the photo's
+    // tone deviation at the facade texel is given, it is held to it: the pattern's relative spread at that texel (the tile
+    // box-filtered to the facade's texels) is scaled down to the ceiling when above
+    const rLevel = gMean > 0 ? Math.min(1, rTo / gMean) : 1;
+    let rScale = 1, spread: number | undefined;
+    if (hold && hold.texels[0] >= 2 && hold.texels[1] >= 2) {
+        const tw = Math.min(orm.width, hold.texels[0]), th = Math.min(orm.height, hold.texels[1]);
+        let s1 = 0, s2 = 0;
+        for (let ty = 0; ty < th; ty++) for (let tx = 0; tx < tw; tx++) {
+            const x0 = Math.floor((tx * orm.width) / tw), x1 = Math.max(x0 + 1, Math.floor(((tx + 1) * orm.width) / tw)), y0 = Math.floor((ty * orm.height) / th), y1 = Math.max(y0 + 1, Math.floor(((ty + 1) * orm.height) / th));
+            let acc = 0, cnt = 0;
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { acc += rTo + relief * rLevel * (orm.rgba[(y * orm.width + x) * 4 + 1] / 255 - gMean); cnt++; }
+            const v = acc / cnt; s1 += v; s2 += v * v;
+        }
+        const m = s1 / (tw * th), sd = Math.sqrt(Math.max(0, s2 / (tw * th) - m * m));
+        spread = m > 0 ? sd / m : 0;
+        if (spread > hold.maxRelStd && spread > 0) rScale = hold.maxRelStd / spread;
+    }
     for (let k = 0; k < n; k++) {
         o[k * 4] = clamp8(remap(orm.rgba[k * 4], aMean, aMean));
-        o[k * 4 + 1] = clamp8(remap(orm.rgba[k * 4 + 1], gMean, rTo));
+        o[k * 4 + 1] = clamp8((rTo + relief * rLevel * rScale * (orm.rgba[k * 4 + 1] / 255 - gMean)) * 255);
         o[k * 4 + 2] = clamp8(remap(orm.rgba[k * 4 + 2], bMean, mTo));
     }
     for (let k = 0; k < normal.width * normal.height; k++) {
@@ -269,5 +296,6 @@ export function finishMaps(orm: { width: number; height: number; rgba: Uint8Arra
         nn[k * 4] = clamp8((tx / l * 0.5 + 0.5) * 255); nn[k * 4 + 1] = clamp8((ty / l * 0.5 + 0.5) * 255); nn[k * 4 + 2] = clamp8((tz / l * 0.5 + 0.5) * 255);
     }
     const r2 = (v: number) => Math.round(v * 100) / 100;
-    return { orm: { ...orm, rgba: o }, normal: { ...normal, rgba: nn }, drawn: { roughness: r2(rTo), metallic: r2(mTo), relief: r2(relief), grain: r2(grain) } };
+    const r3 = (v: number) => Math.round(v * 1000) / 1000;
+    return { orm: { ...orm, rgba: o }, normal: { ...normal, rgba: nn }, drawn: { roughness: r2(rTo), metallic: r2(mTo), relief: r2(relief), grain: r2(grain), ...(spread !== undefined ? { roughnessSpread: r3(spread * rScale), roughnessCeiling: r3(hold!.maxRelStd) } : {}) } };
 }

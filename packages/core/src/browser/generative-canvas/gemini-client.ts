@@ -7,6 +7,7 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
+import type { ChatModelAvailability } from '../../common/chat-models';
 import { Endpoint } from './endpoint';
 import {
     AgentSessionCreateRequest,
@@ -34,6 +35,9 @@ import { VisualVerificationRequest, VisualVerificationOutcome } from '../../comm
 /** Where a chat request failed: the local server was unreachable, it returned an error, or the AI request itself failed. */
 export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
 
+/** How the note chatRequestBody leaves in place of a large glbBase64 begins. A tool that hands the request's scene back returns it unchanged. */
+export const OMITTED_GLB_NOTE = '[omitted from the chat request:';
+
 /**
  * A request body for the chat and visual-check routes, with any large generated-model bytes (a scene's
  * pythonGenerator / cppGenerator glbBase64) replaced by a short note: the server reads models from their glbPath, and a
@@ -43,8 +47,13 @@ export type ChatFailureKind = 'unreachable' | 'server' | 'ai';
 export function chatRequestBody(request: unknown): string {
     return JSON.stringify(request, (key, value) =>
         key === 'glbBase64' && typeof value === 'string' && value.length > 1_000_000
-            ? `[omitted from the chat request: ${value.length} base64 characters; the model is at glbPath]`
+            ? `${OMITTED_GLB_NOTE} ${value.length} base64 characters; the model is at glbPath]`
             : value);
+}
+
+/** True for chatRequestBody's note: the scene's model was not sent, so a scene carrying it has the model it had. */
+export function isOmittedGlbNote(value: unknown): boolean {
+    return typeof value === 'string' && value.startsWith(OMITTED_GLB_NOTE);
 }
 
 export class ChatRequestError extends Error {
@@ -390,6 +399,34 @@ export class GeminiClient {
     /**
      * Save Service Account JSON or API Key credentials.
      */
+    /** The chat's model picker: each model with whether its provider has a key on the server (never the key). */
+    async listChatModels(): Promise<{ models: ChatModelAvailability[]; defaultModel?: string; error?: string }> {
+        try {
+            const res = await fetch(`${this.endpoint()}/chat-models`, { method: 'GET', headers: { 'Accept': 'application/json' } });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) return { models: [], error: body?.error || `HTTP ${res.status}` };
+            return { models: Array.isArray(body.models) ? body.models : [], defaultModel: body.defaultModel };
+        } catch (err: any) {
+            return { models: [], error: err?.message || String(err) };
+        }
+    }
+
+    /** Saves (or, with an empty key, clears) the Claude or OpenAI key on the server. */
+    async saveProviderKey(provider: 'anthropic' | 'openai', apiKey: string): Promise<{ success: boolean; configured?: boolean; error?: string }> {
+        try {
+            const res = await fetch(`${this.endpoint()}/provider-key`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ provider, apiKey })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) return { success: false, error: body?.error || `HTTP ${res.status}` };
+            return { success: true, configured: body.configured === true };
+        } catch (err: any) {
+            return { success: false, error: err?.message || String(err) };
+        }
+    }
+
     async saveCredentials(request: SaveCredentialsRequest): Promise<SaveCredentialsResponse> {
         try {
             const res = await fetch(`${this.endpoint()}/save-credentials`, {

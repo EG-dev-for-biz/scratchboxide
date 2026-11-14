@@ -39,7 +39,7 @@ import { useViewportHistory } from './scene3d/useViewportHistory';
 import { applyDisplayFlag, StepSnapshotView } from './scene3d/displayFlag';
 import { ViewportHistoryButtons } from './scene3d/ViewportHistoryButtons';
 import type { HistoryEditMeta } from './scene3d/useViewportHistory';
-import { ObjectEditCapture, createGeometrySwapEdit } from '../services/viewport-history-deltas';
+import { ObjectEditCapture, createGeometrySwapEdit, deepEqual } from '../services/viewport-history-deltas';
 import { attachHistoryShortcuts } from '../services/viewport-history';
 import { assetRecoveryClient, recoverableAssetPath, type AssetRecoveryState } from '../services/asset-recovery-client';
 import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
@@ -156,6 +156,7 @@ import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { tickObjectAnimations } from './scene3d/objectAnimationRuntime';
 import type { PhysicsRuntimeState } from './scene3d/objectAnimationRuntime';
 import { attachViewportControls, readWorldPose, stepCamera } from './scene3d/attachViewportControls';
+import { orbitFromPose, sceneCameraMovePose } from './scene3d/cameraMove';
 import { WalkSession, type WalkSubMode } from './scene3d/walkMode';
 import { WalkButton, WalkHud } from './scene3d/WalkControl';
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
@@ -177,7 +178,7 @@ import { MAX_BLUR_RADIUS_FRAME_FRACTION, ViewportOpticsChain } from './scene3d/v
 import { ViewportFocusController, pinholeNdcToDisplayedNdc, viewAxisDepth } from './scene3d/viewportFocus';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
 import type { SetCameraLensParams } from '../services/operators/lighting-camera-operators';
-import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
+import { keepsPoseForGeneratedModel, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
 import { countSceneTriangles, sharedTreeBudgetEnabled, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
@@ -1088,17 +1089,14 @@ function generatedHeroObjectId(scene: Scene3DData): string | undefined {
     return (scene.objects || []).find(o => o.content?.metadata?.role === 'hero')?.id;
 }
 
-function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene3DData {
+export function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene3DData {
     // a clay/textured choice made on the open scene (materialMode, renderMode) holds over a later commit of the same run
     const data = carryStagedChoice(prev as StagedMaterialModeFields, streamed as Scene3DData & StagedMaterialModeFields);
-    const hasNewPython = data.pythonGenerator && data.pythonGenerator.sourceCode !== prev.pythonGenerator?.sourceCode;
-    const hasNewCpp = data.cppGenerator && data.cppGenerator.sourceCode !== prev.cppGenerator?.sourceCode;
-    const hasNewObjects = data.objects && data.objects !== prev.objects;
-    const hasNewTitle = data.title && data.title !== prev.title;
-    const hasNewGlb = (data.pythonGenerator?.glbBase64 && data.pythonGenerator.glbBase64 !== prev.pythonGenerator?.glbBase64) ||
-                      (data.cppGenerator?.glbBase64 && data.cppGenerator.glbBase64 !== prev.cppGenerator?.glbBase64);
-    const hasNewStaged = !!readStagedBuild(data) && readStagedBuild(data) !== readStagedBuild(prev);
-    if (!hasNewPython && !hasNewCpp && !hasNewObjects && !hasNewTitle && !hasNewGlb && !hasNewStaged) {
+    // Any top-level field whose value changed is taken in (an accepted edit may touch only the camera, a light or a mesh);
+    // the viewport's own round trip (onUpdate) hands back the same values, so it changes nothing.
+    const a = prev as unknown as Record<string, unknown>, b = data as unknown as Record<string, unknown>;
+    const changed = Object.keys(b).some(key => b[key] !== undefined && b[key] !== a[key] && !deepEqual(b[key], a[key]));
+    if (!changed) {
         return prev;
     }
     return {
@@ -1321,6 +1319,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [selectedClipId, setSelectedClipId] = React.useState<string | undefined>(undefined);
 
     const currentTimeMsRef = React.useRef<number>(0);
+    /** The timeline was scrubbed: a scene with a camera move puts its camera at the new moment once, even while paused. */
+    const cameraMoveDirtyRef = React.useRef<boolean>(false);
     const isPlayingRef = useLatest(isPlaying);
     const playbackSpeedRef = useLatest(playbackSpeed);
     const durationMsRef = useLatest(durationMs);
@@ -2009,7 +2009,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // sceneDataRef is declared next to mutateSceneData above.
 
     // ---- Slice fingerprints -------------------------------------------------------
-    const has3DTiles = React.useMemo(() => sceneAsksForLiveTiles(sceneData), [sceneData.geoAnchor, sceneData.objects]);
+    // a staged build never streams live tiles (sceneAsksForLiveTiles): only its presence matters, not its progress
+    const isStagedScene = !!sceneData.stagedBuild;
+    const has3DTiles = React.useMemo(() => sceneAsksForLiveTiles(sceneData), [sceneData.geoAnchor, sceneData.objects, isStagedScene]);
 
     const effectiveGroundTileMode: GroundTileMode = React.useMemo(() => {
         if (sceneData.groundTileMode) return sceneData.groundTileMode;
@@ -2596,6 +2598,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 10. Camera: the walker in first person (walking or flying, walkMode.ts), else the orbit
                 const walk = walkSessionRef.current;
+                // 10a. A camera move on the timeline (sb.camera_move) drives the orbit while the timeline plays or is
+                // scrubbed; paused, the viewer orbits freely from wherever the move left the camera.
+                if (!walk && (isPlayingRef.current || cameraMoveDirtyRef.current)) {
+                    const movePose = sceneCameraMovePose(sceneDataRef.current, currentTimeMsRef.current);
+                    if (movePose) {
+                        cameraTargetRef.current.set(movePose.target[0], movePose.target[1], movePose.target[2]);
+                        cameraRotationRef.current = orbitFromPose(movePose.position, movePose.target);
+                        if (Math.abs(camera.fov - movePose.verticalFovDeg) > 1e-4) {
+                            camera.fov = movePose.verticalFovDeg;
+                            camera.updateProjectionMatrix();
+                        }
+                    }
+                    cameraMoveDirtyRef.current = false;
+                }
                 if (walk) {
                     stepCamera(camera, 'fps', cameraRotationRef.current, cameraTargetRef.current);
                     walk.step(deltaSec, keysPressedRef.current);
@@ -3181,7 +3197,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 // The first model of a mount (a reload) opens on a saved pose, or the pose a lens was set for (its
                 // focus distance is measured from there); calculateStandoffCamera still re-frames a pose inside the
                 // geometry. New generated content re-frames.
-                const keepPose = !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                const keepPose = keepsPoseForGeneratedModel(sceneDataRef.current.camera, sceneDataRef.current.shots, !generatedFramedOnceRef.current);
                 generatedFramedOnceRef.current = true;
                 const bounds = computeSceneGeometryBounds(stack.scene);
                 const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, {
@@ -3552,7 +3568,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         if (Number.isFinite(sphere.radius) && sphere.radius > 0) setGeneratedContentRadius(Number(sphere.radius.toPrecision(2)));
                     }
                     // As for its base64 copy (effect 5b): the first model of a mount keeps a saved pose or a lens's pose.
-                    const keepPose = isGeneratedHero && !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                    const keepPose = isGeneratedHero && keepsPoseForGeneratedModel(sceneDataRef.current.camera, sceneDataRef.current.shots, !generatedFramedOnceRef.current);
                     if (attach && isGeneratedHero) generatedFramedOnceRef.current = true;
                     if (attach) autoFrameIfNeeded(isGeneratedHero && !keepPose);
                 },
@@ -3755,6 +3771,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const handleScrubChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseFloat(e.target.value);
         currentTimeMsRef.current = val;
+        cameraMoveDirtyRef.current = true;
         setCurrentTimeMs(val);
     };
 
@@ -3765,6 +3782,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const handleTimelineSeek = React.useCallback((timeSec: number) => {
         const timeMs = Math.round(timeSec * 1000);
         currentTimeMsRef.current = timeMs;
+        cameraMoveDirtyRef.current = true;
         setCurrentTimeMs(timeMs);
     }, []);
 

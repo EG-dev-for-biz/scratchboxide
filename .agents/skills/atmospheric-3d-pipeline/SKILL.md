@@ -109,11 +109,15 @@ Enables and configures the full-screen Beer-Lambert aerial perspective pass.
 ```typescript
 engine.executeOperator('sb_configure_aerial_perspective', {
     enabled: true,
-    aerialPerspectiveRange: 6000,
     inscatteringIntensity: 0.85,
-    albedoBoost: 1.1
+    hazeVisibilityMeters: 2500,  // a grey haze of this visibility at ground level (Koschmieder: extinction 3.912 / V)
+    fogHeight: 55,               // the haze thins with height: e-fold height in metres above fogBaseAltitude
+    fogBaseAltitude: 0
 });
 ```
+With `fogHeight` set, a sight line's optical depth is the ground-level extinction times its length times its mean density
+(`common/spatial/height-haze.ts`, the same expression in the shader): a camera above the layer sees the street fade while
+rooftops and the upper skyline stay clear.
 
 ### 4. `sb_configure_terrain_cloud_shadows`
 Configures dynamic cloud shadows projected across terrain and ground geometry.
@@ -170,27 +174,26 @@ Calculates photometric sun intensity, ambient bounce, kelvin temperature, and li
 ```
 
 ### 3. `atmosphere_configure_scene`
-High-level tool that configures atmospheric parameters, clouds, god rays, and aerial perspective for a 3D scene.
+Lights the open 3D scene with a real sun and its sky, and adds clouds, god rays and haze when asked. Read its declaration
+for every parameter; a backlit street at golden hour with haze that hugs the ground looks like this:
 ```json
 {
   "name": "atmosphere_configure_scene",
   "args": {
-    "preset": "sunset",
-    "clouds": {
-      "coverage": 0.45,
-      "density": 1.0
-    },
-    "godRays": {
-      "enabled": true,
-      "density": 0.85
-    },
-    "aerialPerspective": {
-      "enabled": true,
-      "range": 8000
-    }
+    "sunElevationDeg": 33,
+    "sunAzimuthDeg": 325,
+    "visibilityMeters": 2500,
+    "hazeScaleHeightMeters": 55
   }
 }
 ```
+- **Sun azimuth:** degrees clockwise from north, and in the scene north is -z, east +x (0 toward -z, 90 toward +x), the
+  same convention `path_trace_render` takes. For a scene built for a shot, `hero.sun_azimuth_deg(frame_x)` gives it from
+  the frame (-1.5 ahead and to the left).
+- **Haze:** `visibilityMeters` (a clear day tens of kilometres, a hazy city 2000-5000, mist a few hundred) and
+  `hazeScaleHeightMeters` (30-80 for street haze under clear upper air) only when the request asks for air, haze or mist.
+- **Where it shows:** the live viewport and `path_trace_render` draw the same haze. A still of the open scene takes the
+  scene's sun and haze by itself; `path_trace_render` `haze` sets them for any other model.
 
 ---
 

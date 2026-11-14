@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import * as THREE from 'three';
+import { HAZE_COLUMN_FACTOR_GLSL, hazeExtinctionPerM } from '../../../../common/spatial/height-haze';
 import {
     AerialPerspectiveOptions,
     DiurnalLightingProfile
@@ -57,6 +58,9 @@ uniform float uMieDirectionalG;
 uniform float uInscatteringIntensity;
 uniform float uAerialPerspectiveRange;
 uniform float uAerialAlbedoBoost;
+uniform float uHazeScaleHeight;
+uniform float uHazeExtinction;
+uniform float uHazeBaseAltitude;
 
 uniform bool uCloudShadowsEnabled;
 uniform float uCloudShadowIntensity;
@@ -160,6 +164,7 @@ float computeCloudShadow(vec3 worldPos) {
     return shadowFactor;
 }
 
+${HAZE_COLUMN_FACTOR_GLSL}
 // Physical Beer-Lambert Exponential Transmittance & Inscattering
 void computeAerialPerspective(
     vec3 worldPos,
@@ -176,7 +181,11 @@ void computeAerialPerspective(
     vec3 betaExt = betaR + betaM;
 
     // Optical depth
-    vec3 opticalDepth = betaExt * dist * 0.85;
+    // haze that thins with height (uHazeScaleHeight > 0): the sight line's mean density, 1 for uniform haze
+    float column = hazeColumnFactor(uCameraPosition.y, worldPos.y, uHazeScaleHeight, uHazeBaseAltitude);
+    vec3 opticalDepth = betaExt * dist * 0.85 * column;
+    // a grey haze of measured visibility: ground-level extinction 3.912 / visibility (Koschmieder), thinned with height
+    opticalDepth += vec3(uHazeExtinction * dist * column);
     transmittance = exp(-opticalDepth);
 
     // Phase function
@@ -511,6 +520,9 @@ export class AerialPerspectiveEffect {
             uInscatteringIntensity: { value: options.inscatteringIntensity ?? 1.0 },
             uAerialPerspectiveRange: { value: options.aerialPerspectiveRange ?? 220.0 },
             uAerialAlbedoBoost: { value: options.albedoScale ?? 1.1 },
+            uHazeScaleHeight: { value: options.fogHeight ?? 0 },
+            uHazeExtinction: { value: hazeExtinctionPerM(options.hazeVisibilityMeters) },
+            uHazeBaseAltitude: { value: options.fogBaseAltitude ?? 0 },
 
             uCloudShadowsEnabled: { value: options.cloudShadowsEnabled ?? true },
             uCloudShadowIntensity: { value: options.cloudShadowIntensity ?? 0.65 },
@@ -602,6 +614,9 @@ export class AerialPerspectiveEffect {
         if (options.aerialPerspectiveRange !== undefined) {
             u.uAerialPerspectiveRange.value = options.aerialPerspectiveRange;
         }
+        if (options.fogHeight !== undefined) u.uHazeScaleHeight.value = options.fogHeight;
+        if (options.hazeVisibilityMeters !== undefined) u.uHazeExtinction.value = hazeExtinctionPerM(options.hazeVisibilityMeters);
+        if (options.fogBaseAltitude !== undefined) u.uHazeBaseAltitude.value = options.fogBaseAltitude;
         if (options.cloudShadowsEnabled !== undefined) {
             u.uCloudShadowsEnabled.value = options.cloudShadowsEnabled;
         }

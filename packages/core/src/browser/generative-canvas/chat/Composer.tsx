@@ -16,6 +16,8 @@ import type { AttachedDataFile, QueuedPromptItem } from '../hooks/useSendMessage
 import { isImageFile, type ComposerImage } from '../hooks/useImageAttachments';
 import type { WorkspaceGitStatusSnapshot } from '../state/studio-defaults';
 import { isScopedTo3dVfx } from '../../../common/product-scope';
+import type { ChatModelAvailability } from '../../../common/chat-models';
+import { ModelPicker } from './ModelPicker';
 
 export function getComposerPlaceholder(
     attachedDataFile: AttachedDataFile | undefined,
@@ -103,6 +105,11 @@ export interface ComposerProps {
      * pipeline) also sets `isGenerating` but cannot be stopped, so it keeps the busy send button.
      */
     canStop: boolean;
+    /** The model this chat runs on (empty: the server default), and the picker's list. */
+    chatModel?: string;
+    setChatModel?: (model: string) => void;
+    chatModels?: ChatModelAvailability[];
+    defaultChatModel?: string;
 }
 
 /** Images go to the image attachments; the first other file to the data-file handler (CSV / JSON). */
@@ -166,7 +173,11 @@ export const Composer: React.FC<ComposerProps> = ({
     queuedMessages = [],
     removeQueuedMessage,
     stopGenerating,
-    canStop
+    canStop,
+    chatModel,
+    setChatModel,
+    chatModels,
+    defaultChatModel
 }) => (
     <div
         className={`sb-unified-composer-capsule ${inSplitPane ? 'sb-split-pane-composer' : ''} ${isDraggingDataFile ? 'sb-composer-drag-over' : ''}`}
@@ -408,6 +419,9 @@ export const Composer: React.FC<ComposerProps> = ({
                 >
                     <IconPlus size={14} strokeWidth={2.2} />
                 </button>
+                {setChatModel && chatModels && chatModels.length > 0 && (
+                    <ModelPicker value={chatModel || ''} onChange={setChatModel} models={chatModels} defaultModel={defaultChatModel} />
+                )}
                 <div className="sb-cursor-mode-selector">
                     <button
                         type="button"

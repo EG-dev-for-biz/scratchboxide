@@ -7,6 +7,7 @@ import { HeadlessMeshSilhouetteRenderer } from '../spatial/HeadlessMeshSilhouett
 import type { TriangleSoup } from './part-connectivity';
 import { GeminiClient } from '../gemini/gemini-client';
 import { decodePng } from '../texture-processing';
+import { verticalFovDeg, type ShotCamera } from '../../common/spatial/shot-detail-budget';
 
 export interface ReviewView {
     label: string;
@@ -71,11 +72,36 @@ export function renderReviewViews(soup: TriangleSoup, size = 512, options: { use
             { vertices: soup.positions, indices: soup.indices }, pose, size, size,
             {
                 clayColor: [196, 200, 206], bgColor: [236, 238, 242, 255], lightDir: [0.45, 0.85, 0.35], clipNearPlane: true,
+                // the camera stands off by the model's own size, so a scene over a kilometre across is still inside the far plane
+                farPlane: Math.max(1000, distance + radius * 1.1),
                 vertexColors: options.useMaterialColors ? soup.colors : undefined
             }
         );
         return { label: view.label, png: HeadlessMeshSilhouetteRenderer.encodePng(width, height, rgba) };
     });
+}
+
+/** The label a shot's view carries in the review (buildReviewPrompt explains it by this prefix). */
+export const SHOT_VIEW_LABEL = 'shot camera';
+/** How far the shot view draws, in metres: a street shot looks to the horizon. */
+const SHOT_VIEW_FAR_M = 20000;
+
+/**
+ * The model as its declared shot frames it (sb.shot): the picture the scene is built for, in clay, at the shot's
+ * own aspect. The review's other views fit the whole model; this one shows what the lens actually sees.
+ */
+export function renderShotView(soup: TriangleSoup, shot: ShotCamera, width = 896): ReviewView {
+    const height = Math.max(2, Math.round(width / shot.aspect));
+    const pose = {
+        x: shot.position[0], y: shot.position[1], z: shot.position[2],
+        targetX: shot.target[0], targetY: shot.target[1], targetZ: shot.target[2],
+        fov: verticalFovDeg(shot)
+    };
+    const { rgba } = HeadlessMeshSilhouetteRenderer.renderShadedMesh(
+        { vertices: soup.positions, indices: soup.indices }, pose, width, height,
+        { clayColor: [196, 200, 206], bgColor: [236, 238, 242, 255], lightDir: [0.45, 0.85, 0.35], clipNearPlane: true, farPlane: SHOT_VIEW_FAR_M }
+    );
+    return { label: `${SHOT_VIEW_LABEL} "${shot.name}"`, png: HeadlessMeshSilhouetteRenderer.encodePng(width, height, rgba) };
 }
 
 export function buildReviewPrompt(request: string, description: string, labels: string[]): string {
@@ -84,6 +110,12 @@ export function buildReviewPrompt(request: string, description: string, labels: 
         `User request: "${request}"`,
         description ? `What the script says it built: "${description}"` : '',
         `The images are untextured clay renders, in this order: ${labels.join(', ')}.`,
+        labels.some(l => l.startsWith(SHOT_VIEW_LABEL))
+            ? `A view labelled "${SHOT_VIEW_LABEL}" is the camera the scene is built for: also report what is wrong in that frame ` +
+              'itself (the subject cut off or out of frame, the frame mostly empty or blocked by something close to the lens, ' +
+              'the camera inside or under geometry, or something the request places on one side of the frame, left or right, ' +
+              'near or far, standing on the other). The other views fit the whole model and are there to check its shape.'
+            : '',
         'Report only clear, objective shape or structure errors that are visible in the images: parts that are missing, ' +
         'detached or floating, members that cross or lean the wrong way, wrong counts (for example 3 legs instead of 4), ' +
         'clearly wrong proportions, or broken, collapsed or inside-out geometry. Do not comment on colour, material, ' +
@@ -116,9 +148,10 @@ export async function reviewModelVisually(
     soup: TriangleSoup,
     request: string,
     description: string,
-    callVisionModel: VisionModelCall
+    callVisionModel: VisionModelCall,
+    shotViews: ReviewView[] = []
 ): Promise<{ result: VisualReviewResult; views: ReviewView[] }> {
-    const views = renderReviewViews(soup);
+    const views = [...shotViews, ...renderReviewViews(soup)];
     try {
         const reply = await callVisionModel(buildReviewPrompt(request, description, views.map(v => v.label)), views.map(v => v.png));
         return { result: parseReviewReply(reply), views };

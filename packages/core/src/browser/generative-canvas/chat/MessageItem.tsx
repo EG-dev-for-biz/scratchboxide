@@ -589,10 +589,11 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ message, activeArtifactI
                     <QuestionCard
                         card={msg.questionCard}
                         messageId={msg.id}
-                        onSubmit={(answerText, selections) => {
+                        onSubmit={(answerText, selections, pickedPlace) => {
                             if (msg.questionCard) {
                                 msg.questionCard.submitted = true;
                                 msg.questionCard.selectedOptions = selections;
+                                if (pickedPlace) msg.questionCard.pickedPlace = pickedPlace;
                             }
                             if (sendMessage) {
                                 sendMessage(answerText);

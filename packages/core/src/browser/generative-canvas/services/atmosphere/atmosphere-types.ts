@@ -152,6 +152,8 @@ export interface AtmosphericScatteringConfig {
     fogDensity?: number;
     fogBaseAltitude?: number;
     fogHeight?: number;
+    /** A grey haze of this visibility at ground level, in metres (Koschmieder: extinction 3.912 / visibility); none when absent. */
+    hazeVisibilityMeters?: number;
     albedoScale?: number;
 
     // Terrain Cloud Shadows
@@ -172,6 +174,8 @@ export interface AerialPerspectiveOptions {
     fogDensity?: number;
     fogBaseAltitude?: number;
     fogHeight?: number;
+    /** A grey haze of this visibility at ground level, in metres (Koschmieder: extinction 3.912 / visibility); none when absent. */
+    hazeVisibilityMeters?: number;
     albedoScale?: number;
     cloudShadowsEnabled?: boolean;
     cloudShadowIntensity?: number;

@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import {
+    keepsPoseForGeneratedModel,
     effectiveFocalLength,
     focalLengthCommands,
     focalLengthForFov,
@@ -176,5 +177,24 @@ describe('the ends of the focal range in the optics plan and the agent tool', ()
         const out = await physicalCameraHandlers.configure_physical_camera({ focalLengthMm: 0, apertureFStop: 2.8 }, { request: { activeArtifact: active } } as any) as any;
         expect(out.status).toBe('failed');
         expect(out.summaryResult).toMatch(/NOT applied/);
+    });
+});
+
+describe('a generated model keeps a declared shot', () => {
+    // keepsPoseForGeneratedModel: a scene built for a shot (sb.shot) opens on it whether it arrives from the chat into an
+    // open viewport or loads on a reload; any other saved pose is kept only for the first model of a mount.
+    const shotCamera = { position: [0, 160, 95] as [number, number, number], target: [0, 14, -210] as [number, number, number], fov: 26.9, keepPoseOnLoad: true };
+    const shots = [{ name: 'hero' }];
+    it('keeps the shot for new content as well as on a reload', () => {
+        expect(keepsPoseForGeneratedModel(shotCamera, shots, false)).toBe(true);
+        expect(keepsPoseForGeneratedModel(shotCamera, shots, true)).toBe(true);
+    });
+    it('keeps any other saved pose only for the first model of a mount, and re-frames new content', () => {
+        expect(keepsPoseForGeneratedModel(shotCamera, undefined, true)).toBe(true);
+        expect(keepsPoseForGeneratedModel(shotCamera, undefined, false)).toBe(false);
+        expect(keepsPoseForGeneratedModel(shotCamera, [], false)).toBe(false);
+        // shots without a saved camera, or a camera without a position, re-frame
+        expect(keepsPoseForGeneratedModel({ ...shotCamera, keepPoseOnLoad: undefined }, shots, false)).toBe(false);
+        expect(keepsPoseForGeneratedModel(undefined, shots, false)).toBe(false);
     });
 });

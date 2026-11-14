@@ -312,16 +312,24 @@ export function evidenceLookup(ev: VectorEvidence, radiusM: number, cellMeters =
     const half = Math.ceil(radiusM + 20);
     const grid: EvidenceGrid = { x0: -half, z0: -half, nx: Math.ceil((2 * half) / cellMeters), nz: Math.ceil((2 * half) / cellMeters), cellMeters };
     const raster = rasterizeEvidence(ev, grid);
+    return { raster, grid, pois: ev.pois ?? [], ...evidenceLookupFromRaster(raster, grid) };
+}
+
+/**
+ * The point lookups over rasters already drawn (evidenceLookup's own): what a worker thread rebuilds them from, given the
+ * rasters as plain data.
+ */
+export function evidenceLookupFromRaster(raster: Pick<EvidenceRaster, 'building' | 'water' | 'road'> & Partial<Pick<EvidenceRaster, 'landuse' | 'landuseAreas'>>, grid: EvidenceGrid): Pick<EvidenceLookup, 'buildingAt' | 'waterAt' | 'roadAt' | 'landuseAt'> {
+    const cellMeters = grid.cellMeters;
     const at = (x: number, z: number) => {
         const i = Math.floor((x - grid.x0) / cellMeters), k = Math.floor((z - grid.z0) / cellMeters);
         return i < 0 || k < 0 || i >= grid.nx || k >= grid.nz ? -1 : k * grid.nx + i;
     };
     return {
-        raster, grid, pois: ev.pois ?? [],
         buildingAt: (x, z) => { const c = at(x, z); return c < 0 ? 0 : raster.building[c]; },
         waterAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.water[c] === 1; },
         roadAt: (x, z) => { const c = at(x, z); return c >= 0 && raster.road[c] === 1; },
-        landuseAt: (x, z) => { const c = at(x, z); const i = c < 0 ? 0 : raster.landuse[c]; return i > 0 ? raster.landuseAreas[i - 1]?.types : undefined; }
+        landuseAt: (x, z) => { const c = at(x, z); const i = c < 0 || !raster.landuse ? 0 : raster.landuse[c]; return i > 0 ? raster.landuseAreas?.[i - 1]?.types : undefined; }
     };
 }
 

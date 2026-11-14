@@ -87,6 +87,7 @@ import {
     synthesizeTerminalDebugPrompt
 } from './terminal-debug-bridge';
 import { GeminiClient, AudioPlayer } from './gemini-client';
+import { useChatModel } from './hooks/useChatModel';
 import { WorkspaceConfigClient } from './workspace-config-client';
 import {
     IconAutomations,
@@ -172,6 +173,7 @@ import { useArtifactExports } from './hooks/useArtifactExports';
 import { useCanvasOpeners } from './hooks/useCanvasOpeners';
 import { useStageLayout } from './hooks/useStageLayout';
 import { useArtifactSync } from './hooks/useArtifactSync';
+import { useSceneProposalReview } from './hooks/useSceneProposalReview';
 import { useLayoutModeSwitch, useCreateEmptyCanvas, UseLayoutModeSwitchDeps } from './hooks/useLayoutModeSwitch';
 import { useWorkspaceFiles, useWorkspaceFileCreation, UseWorkspaceFilesDeps } from './hooks/useWorkspaceFiles';
 import { useCapabilities } from './hooks/useCapabilities';
@@ -572,6 +574,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
     const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path);
+    // The model this chat's agent runs on (Gemini, Claude or OpenAI), kept on the chat.
+    const { chatModel, setChatModel, chatModels, defaultChatModel } = useChatModel(sessions, currentSessionId, setSessions, persistSessionsImmediately);
 
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
@@ -1198,6 +1202,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         setGraphEpoch,
         activeWorkspace,
         persistSessionsImmediately,
+        chatModel,
         aiInteractionMode,
         openSettingsToTab
     });
@@ -1321,7 +1326,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         queuedMessages,
         removeQueuedMessage,
         stopGenerating: handleStopGenerating,
-        canStop: streamInFlight
+        canStop: streamInFlight,
+        chatModel,
+        setChatModel,
+        chatModels,
+        defaultChatModel
     };
 
     const messageListProps = {
@@ -1363,8 +1372,11 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
 
     // The 3D/VFX build (common/product-scope.ts) shows only the canvases it offers; the session keeps the others as saved.
     const visibleArtifactHistory = React.useMemo(() => artifactHistory.filter(a => canShowPrimitive(a.type)), [artifactHistory]);
+    // An agent edit held on the scene on stage, with Accept / Reject (services/scene-proposals.ts).
+    const sceneProposalReview = useSceneProposalReview({ activeArtifact, activeSession, currentSessionId, setSessions, updateArtifact: handleUpdateArtifact });
     const artifactStageProps: ArtifactStageProps = {
         activeArtifact: activeArtifact && canShowPrimitive(activeArtifact.type) ? activeArtifact : undefined,
+        sceneProposalReview,
         setActiveArtifact,
         artifactHistory: visibleArtifactHistory,
         setArtifactHistory,

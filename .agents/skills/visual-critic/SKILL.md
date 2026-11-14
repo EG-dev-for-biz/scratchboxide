@@ -115,6 +115,24 @@ Every visual scene or capture must be evaluated against these 8 dimensions. Each
 
 ---
 
+## 2b. Judging a Frame Against Its Brief (scenes built for a shot)
+
+When the request named a camera and asked for a render, judge the delivered frame against the brief before any rubric:
+
+1. **List the brief's clauses** (each object asked for, the side of the frame it stands on, near or far, the light's side
+   and height, the lens and frame, the air) and mark each met or not from the pixels. Fix the first unmet clause first.
+2. **Sides:** left and right are read in the frame. A tower asked for on the left that stands on the right is a mirrored
+   scene: the script placed it on the wrong axis (looking down -z, frame left is -x); `hero.frame_point` places it right.
+3. **The light's side from the shadows:** shadows fall away from the sun. A sun asked for ahead-left throws shadows toward
+   the lower right of the frame.
+4. **Density, measured:** the script tool's shot detail budget gives the share of in-frame triangles under 2 px
+   ("wasted") and pixels per triangle ("under-built" past 16). A frame of plain boxes is under-built whatever it costs.
+5. **What the tool cannot show is not the scene's fault, and is said plainly:** the path tracer dresses trees from the tree
+   texture library as the viewport does but without per-leaf colour variation or translucency, and draws the scene's haze
+   as the viewport does. Review renders of a scene more than a kilometre
+   across were blank before their far plane was fixed: a blank review image is a render fault to report, never a verdict
+   on the scene.
+
 ## 3. Automatic Disqualifiers ("Red Lines" — Instant Fail)
 
 If a scene exhibits ANY of the following, it is an **AUTOMATIC CRITICAL FAILURE**, regardless of other scores:

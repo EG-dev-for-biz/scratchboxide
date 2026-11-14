@@ -701,6 +701,8 @@ export class HeadlessMeshSilhouetteRenderer {
             clipNearPlane?: boolean;
             /** Linear RGB per vertex (0..1). When given, each triangle is shaded in its own color instead of clayColor. */
             vertexColors?: Float32Array | number[];
+            /** Distance past which nothing is drawn, in metres (default 1000): raise it for a camera standing off a large scene. */
+            farPlane?: number;
         }
     ): { width: number; height: number; rgba: Buffer; depthBuffer: Float32Array; silhouetteBuffer: Uint8Array } {
         const baseColor = options?.clayColor || [190, 205, 220]; // Studio grey-blue clay
@@ -749,7 +751,7 @@ export class HeadlessMeshSilhouetteRenderer {
         const fovRad = (pose.fov * Math.PI) / 180;
         const f = 1.0 / Math.tan(fovRad / 2);
         const zNear = HeadlessMeshSilhouetteRenderer.nearPlaneFor(pose);
-        const zFar = 1000.0;
+        const zFar = options?.farPlane && options.farPlane > 0 ? options.farPlane : 1000.0;
 
         const V = [
             rx, ux, -fx, 0,

@@ -21,7 +21,9 @@ export interface ProvenanceDescription {
 
 const CREDENTIAL_LABEL: Record<ModelAnswerProvenance['credential'], string> = {
     vertex: 'Vertex AI',
-    'api-key': 'Gemini API key'
+    'api-key': 'Gemini API key',
+    'anthropic-api-key': 'Anthropic API key',
+    'openai-api-key': 'OpenAI API key'
 };
 
 /** "Answered by X — Y unavailable: <reason>" when the fallback list moved on; the model and credential always. */

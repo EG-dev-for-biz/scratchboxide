@@ -420,6 +420,10 @@ export function syncAtmosphere(
                     turbidity: atmoConfig.turbidity ?? 1.5,
                     mieDirectionalG: atmoConfig.mieDirectionalG ?? 0.82,
                     albedoScale: atmoConfig.albedoScale ?? 1.1,
+                    // haze that thins with height: fogHeight is its e-fold height above fogBaseAltitude (absent: uniform)
+                    fogHeight: atmoConfig.fogHeight,
+                    fogBaseAltitude: atmoConfig.fogBaseAltitude,
+                    hazeVisibilityMeters: atmoConfig.hazeVisibilityMeters,
                     cloudShadowsEnabled: cloudShadowsOn,
                     cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
                     cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,

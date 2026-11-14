@@ -24,6 +24,9 @@ import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-
 import { parseVehicleBatchReply, parseVehicleReply, removeVehicles, vehicleRemovalParams, VEHICLE_REMOVAL_PARAMS, type VehicleBatchJudge, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { readStructure } from '../src/node/3d-engine/staged-location/surface-infill-synthesis';
+import { removeVehiclesOffThread, runVehicleRemovalJob, type VehicleRemovalJob } from '../src/node/3d-engine/staged-location/vehicle-removal-run';
+import { evidenceLookup, evidenceLookupFromRaster } from '../src/node/3d-engine/staged-location/vector-footprints';
+import { findWorkerEntry } from '../src/node/worker-ts-register';
 
 const HALF = 15, STEP = 0.25, TEX = 600;
 const SLOPE = 0.02;
@@ -485,5 +488,116 @@ describe("a vehicle's shell over the street the scan also holds beneath it", () 
         }
         expect(awningVerts).toBeGreaterThan(100);
         expect(overCar).toBeGreaterThan(20);
+    });
+});
+
+describe('vehicle removal off the main thread (vehicle-removal-run.ts)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-vehicles-thread-'));
+    const tex = path.join(dir, 'in_textured.glb'), geo = path.join(dir, 'in_geometry.glb');
+    fs.writeFileSync(tex, syntheticStreet(true));
+    fs.writeFileSync(geo, syntheticStreet(false));
+    const job = (outDir: string, extra: Partial<VehicleRemovalJob> = {}): VehicleRemovalJob => ({ texturedGlb: tex, geometryGlb: geo, scanGlb: tex, groundOptions: { cellMeters: 1 }, lookups: { within: { radiusM: 40 } }, outDir: path.join(dir, outDir), ...extra });
+    const withoutMs = (file: string) => { const r = JSON.parse(fs.readFileSync(file, 'utf8')); delete r.ms; return r; };
+
+    it('writes the same GLBs and report as on the main thread, the judge answering on the calling thread', async () => {
+        const scan = loadScanMesh(tex);
+        const inline = await removeVehicles({ texturedGlb: tex, geometryGlb: geo, scan, ground: buildGroundModel(scan, { cellMeters: 1 }), look: { within: (x, z) => Math.hypot(x, z) <= 40 }, judge, outDir: path.join(dir, 'inline') });
+        const crops: Array<{ jpegIsBuffer: boolean; soi: number }> = [];
+        const logs: string[] = [];
+        const threaded = await removeVehiclesOffThread(job('thread'), {
+            judge: async crop => { crops.push({ jpegIsBuffer: Buffer.isBuffer(crop.jpeg), soi: crop.jpeg.readUInt16BE(0) }); return judge(crop); },
+            log: m => logs.push(m)
+        });
+        expect(threaded.report.removed).toHaveLength(1);
+        expect(threaded.report.removed[0].labels).toEqual(['parked red car']);
+        // the crops crossed the thread boundary as JPEGs the caller's judge reads as a Buffer
+        expect(crops.length).toBe(inline.report.crops);
+        expect(crops.every(c => c.jpegIsBuffer && c.soi === 0xffd8)).toBe(true);
+        expect(logs.some(m => /proud components/.test(m))).toBe(true);
+        // byte for byte: the patched GLBs, and the report but its time
+        expect(Buffer.compare(fs.readFileSync(threaded.texturedGlb), fs.readFileSync(inline.texturedGlb))).toBe(0);
+        expect(Buffer.compare(fs.readFileSync(threaded.geometryGlb!), fs.readFileSync(inline.geometryGlb!))).toBe(0);
+        expect(withoutMs(path.join(dir, 'thread', 'vehicle_removal.json'))).toEqual(withoutMs(path.join(dir, 'inline', 'vehicle_removal.json')));
+        const { ms: _a, ...a } = threaded.report, { ms: _b, ...b } = inline.report;
+        expect(a).toEqual(b);
+    });
+
+    it('reads the batches on the calling thread too, and a judge that fails there is the failed call it is inline', async () => {
+        const P = { ...VEHICLE_REMOVAL_PARAMS, batch: 2 };
+        const batches: number[][] = [];
+        const many: VehicleBatchJudge = async crops => { batches.push(crops.map(c => c.index)); throw new Error('quota of the moment'); };
+        const failing: VehicleJudge = async () => { throw new Error('the vision call took longer than 90 s'); };
+        const out = await removeVehiclesOffThread(job('failing', { P }), { judge: failing, judgeMany: many });
+        expect(batches.length).toBeGreaterThan(0);
+        expect(batches.every(b => b.length <= 2)).toBe(true);
+        expect(out.report.failedCalls.length).toBe(out.report.crops);
+        expect(out.report.failedCalls[0].error).toBe('the vision call took longer than 90 s');
+        expect(out.report.removed).toHaveLength(0);
+    });
+
+    it('keeps the main thread free while the thread works', async () => {
+        let maxGap = 0, last = performance.now(), ticks = 0;
+        const timer = setInterval(() => { const n = performance.now(); maxGap = Math.max(maxGap, n - last); last = n; ticks++; }, 10);
+        try { await removeVehiclesOffThread(job('free'), { judge }); } finally { clearInterval(timer); }
+        expect(ticks).toBeGreaterThan(5);
+        // inline the same job holds the loop for the whole scan's load, the candidates, the crops and the patch
+        expect(maxGap).toBeLessThan(500);
+    });
+
+    it('stops on the signal: the thread is ended and the call rejects with its reason', async () => {
+        const ac = new AbortController();
+        const why = new Error('the run was stopped');
+        const p = removeVehiclesOffThread(job('stopped'), { judge: async () => { ac.abort(why); return new Promise(() => undefined); }, signal: ac.signal });
+        await expect(p).rejects.toBe(why);
+        expect(fs.existsSync(path.join(dir, 'stopped', 'vehicle_removal.json'))).toBe(false);
+    });
+
+    it('runs the same job on the calling thread with SCRATCHBOX_VEHICLES_WORKER=0', async () => {
+        const prev = process.env.SCRATCHBOX_VEHICLES_WORKER;
+        process.env.SCRATCHBOX_VEHICLES_WORKER = '0';
+        try {
+            const out = await removeVehiclesOffThread(job('inline-env'), { judge });
+            const direct = await runVehicleRemovalJob(job('direct'), { judge });
+            expect(Buffer.compare(fs.readFileSync(out.texturedGlb), fs.readFileSync(direct.texturedGlb))).toBe(0);
+        } finally { if (prev === undefined) delete process.env.SCRATCHBOX_VEHICLES_WORKER; else process.env.SCRATCHBOX_VEHICLES_WORKER = prev; }
+    });
+
+    it("rebuilds the vector lookups from the rasters alone, cell for cell", () => {
+        const sq = (x0: number, z0: number, s: number) => [[[x0, z0], [x0 + s, z0], [x0 + s, z0 + s], [x0, z0 + s]]] as Array<Array<[number, number]>>;
+        const ev = { buildings: [{ id: 'b1', parts: [sq(-10, -10, 6)] }], roads: [[[-20, 3], [20, 3]]], water: [sq(8, 8, 5)] } as unknown as Parameters<typeof evidenceLookup>[0];
+        const look = evidenceLookup(ev, 25);
+        const again = evidenceLookupFromRaster({ building: look.raster.building.slice(), water: look.raster.water.slice(), road: look.raster.road.slice() }, { ...look.grid });
+        let building = 0, water = 0, road = 0;
+        for (let z = -30; z <= 30; z += 0.7) for (let x = -30; x <= 30; x += 0.7) {
+            expect(again.buildingAt(x, z)).toBe(look.buildingAt(x, z));
+            expect(again.waterAt(x, z)).toBe(look.waterAt(x, z));
+            expect(again.roadAt(x, z)).toBe(look.roadAt(x, z));
+            if (look.buildingAt(x, z) > 0) building++;
+            if (look.waterAt(x, z)) water++;
+            if (look.roadAt(x, z)) road++;
+        }
+        expect(building).toBeGreaterThan(0);
+        expect(water).toBeGreaterThan(0);
+        expect(road).toBeGreaterThan(0);
+    });
+});
+
+describe('a worker entry found from a bundled server', () => {
+    it('looks beside the module, then in the package the bundle was built from (its source, then its compiled tree)', () => {
+        const pkg = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-worker-entry-'));
+        const bundleDir = path.join(pkg, 'dist', 'node', 'mcp');
+        fs.mkdirSync(bundleDir, { recursive: true });
+        expect(() => findWorkerEntry('thing-run', bundleDir, '3d-engine/x')).toThrow(/thing-run was not found/);
+        const compiled = path.join(pkg, 'dist', 'node', '3d-engine', 'x', 'thing-run.js');
+        fs.mkdirSync(path.dirname(compiled), { recursive: true });
+        fs.writeFileSync(compiled, '');
+        expect(findWorkerEntry('thing-run', bundleDir, '3d-engine/x')).toBe(compiled);
+        const source = path.join(pkg, 'src', 'node', '3d-engine', 'x', 'thing-run.ts');
+        fs.mkdirSync(path.dirname(source), { recursive: true });
+        fs.writeFileSync(source, '');
+        expect(findWorkerEntry('thing-run', bundleDir, '3d-engine/x')).toBe(source);
+        const beside = path.join(bundleDir, 'thing-run.js');
+        fs.writeFileSync(beside, '');
+        expect(findWorkerEntry('thing-run', bundleDir, '3d-engine/x')).toBe(beside);
     });
 });

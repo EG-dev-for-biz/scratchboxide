@@ -188,6 +188,8 @@ export function usePersistedChatState(
     workspaceRoot?: string
 ): { persistSessionsImmediately: (updatedSessions: ChatSession[]) => void } {
     const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, layoutMode, artifactVersions } = chatState;
+    // the open chat's agent edits waiting for review (services/scene-proposals.ts): accepting or rejecting one is saved too
+    const sceneProposals = currentSessionId ? sessions.find(s => s.id === currentSessionId)?.sceneProposals : undefined;
 
     // Disk is the durable copy (<workspace>/.scratchbox/sessions); localStorage only gives an instant first paint, and
     // can hold an older copy of a chat than disk. Reading disk brings the open chat up to date ('sessions/fromDisk'),
@@ -216,7 +218,7 @@ export function usePersistedChatState(
             void WorkspaceConfigClient.getInstance().saveSession(workspaceRoot, { ...session });
         }, 1500);
         return () => clearTimeout(timer);
-    }, [messages, activeArtifact, artifactHistory, layoutMode, currentSessionId, workspaceRoot, readRoot]);
+    }, [messages, activeArtifact, artifactHistory, layoutMode, sceneProposals, currentSessionId, workspaceRoot, readRoot]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
     React.useEffect(() => {
@@ -279,7 +281,7 @@ export function usePersistedChatState(
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [messages, activeArtifact, artifactHistory, layoutMode, artifactVersions, appearanceConfig, currentSessionId]);
+    }, [messages, activeArtifact, artifactHistory, layoutMode, artifactVersions, appearanceConfig, sceneProposals, currentSessionId]);
 
     const persistSessionsImmediately = React.useCallback((updatedSessions: ChatSession[]) => {
         try {

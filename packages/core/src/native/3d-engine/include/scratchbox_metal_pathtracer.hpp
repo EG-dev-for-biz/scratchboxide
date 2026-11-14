@@ -87,6 +87,8 @@ struct Lighting {
     Vec3 studioRadiance{1.0f, 1.0f, 1.0f};
     /** Required in Sky mode. */
     const sky::PhysicalSky* sky{nullptr};
+    /** Sky mode: haze beyond the sky model's own, and its falloff with height (render::HeightHaze). */
+    render::HeightHaze haze{};
 };
 
 /** Filter settings (denoise::DenoiseSettings) plus temporal reuse. */
@@ -676,7 +678,9 @@ public:
             u.sunSolidAngle = sky.sunSolidAngle();
             put(u.sunIrradiance, sky.sunIrradiance());
             u.sunVisible = render::detail::luminance(sky.sunIrradiance()) > 1e-8f ? 1 : 0;
-            put(u.hazeExtinction, sky.hazeExtinction());
+            put(u.hazeExtinction, sky.hazeExtinction() + lighting.haze.extinction);
+            u.hazeScaleHeight = lighting.haze.scaleHeight;
+            u.hazeBaseY = lighting.haze.baseY;
             u.limbDarkening = static_cast<float>(sky::detail::kLimbDarkening);
             u.azimuthRes = static_cast<uint32_t>(sky.azimuthResolution());
             u.elevationRes = static_cast<uint32_t>(sky.elevationResolution());

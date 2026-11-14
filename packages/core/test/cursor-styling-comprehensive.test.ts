@@ -94,10 +94,11 @@ async function runCursorStylingComprehensiveTests() {
     // -------------------------------------------------------------
     // Test 5: Google Models Backend Exclusivity & Privacy
     // -------------------------------------------------------------
-    assert.ok(settingsSource.includes('High Reasoning Engine'), 'SettingsModal presents capability tier without leaking model slug');
-    assert.ok(settingsSource.includes('Fast Intelligence'), 'SettingsModal presents Fast Intelligence tier');
+    // Since 2026-11-12 (user decision) the chat may run on Gemini, Claude or OpenAI, picked per chat; Settings keeps the
+    // provider keys and names providers by label, never a raw model id in its status.
+    assert.ok(settingsSource.includes('CHAT_PROVIDER_LABEL'), 'Settings names chat providers by their labels');
     assert.ok(!settingsSource.includes('Active Model: gemini-'), 'SettingsModal does not leak raw model slug string');
-    console.log('  ✓ Test 5 Passed: Strict Google Models backend exclusivity and UI privacy verified');
+    console.log('  ✓ Test 5 Passed: chat providers named by label in Settings, no raw model slug in its status');
 
     // -------------------------------------------------------------
     // Test 6: Unified CSS Design System & Visual Hierarchy

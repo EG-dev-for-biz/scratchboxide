@@ -22,7 +22,7 @@
 
 import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry, restoreCacheFile } from '../../cloud-store/cache-mirror';
 import { GcsCloudBucket } from '../../cloud-store/cloud-bucket';
-import { cloudChunkConfig, CloudRunJobsRest, CloudRunServiceJobs, createCloudChunkRunner, RoundRobinJobs, type RunChunk } from './cloud-chunk-runner';
+import { cloudChunkConfig, CloudRunJobsRest, CloudRunServiceJobs, createCloudChunkRunner, HybridJobs, RoundRobinJobs, VmPoolJobs, type CloudRunJobs, type RunChunk } from './cloud-chunk-runner';
 import { kdChunkRunner } from './pipeline-k/district-chunks';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
@@ -382,10 +382,13 @@ function cloudRunChunk(cache: StageCache): NonNullable<StagedLocationDeps['runCh
         const config = cloudChunkConfig();
         const storage = new GoogleMediaCredentialsService().createStorageClient();
         // the warm worker pool (a Cloud Run service, SCRATCHBOX_KD_CLOUD_SERVICE) when named, else a job execution a chunk
-        const jobs = config.service
+        const pool: CloudRunJobs = config.service
             ? (config.serviceRegions?.length ? new RoundRobinJobs(await Promise.all(config.serviceRegions.map(region => CloudRunServiceJobs.create({ ...config, region })))) : await CloudRunServiceJobs.create(config))
             : await CloudRunJobsRest.create(config);
-        return createCloudChunkRunner({ cache, config, bucket: new GcsCloudBucket(storage.bucket(config.bucket)), jobs });
+        const bucket = new GcsCloudBucket(storage.bucket(config.bucket));
+        // the largest chunks on the fast VMs (SCRATCHBOX_KD_CLOUD_VMS), the rest on the pool
+        const jobs = config.vms?.length ? new HybridJobs(await VmPoolJobs.create(config, bucket, path.join(cache.dir, '.kd-vm'), m => console.log(m)), pool) : pool;
+        return createCloudChunkRunner({ cache, config, bucket, jobs });
     };
     return async (request, o) => {
         runner ??= make();

@@ -80,7 +80,7 @@ import { treeSpeciesPlaceParams } from '../../../common/spatial/tree-species-lib
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineIsolate, TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
-import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
+import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictAuditResult, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
@@ -120,7 +120,8 @@ import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { carriagewayLevelAt, removeStreetResidue, streetResidueEnabled, writeStreetResidue, STREET_RESIDUE_VERSION, type StreetResidueReport } from './street-residue';
 import { SURFACE_INFILL_VERSION } from './surface-infill';
-import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
+import { removeVehiclesOffThread } from './vehicle-removal-run';
+import { vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
@@ -204,11 +205,15 @@ import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
-import { stagedModelService } from './staged-switches';
+import { stagedModelService, streetObjectsAuto, streetObjectsAutoMaxFamilies } from './staged-switches';
+import { autoRebuildStreetObjects, STREET_OBJECTS_AUTO_VERSION } from './street-objects/auto';
+import type { BlobReadReport } from './street-objects/blob-reader';
+import type { StreetObjectsReport } from './street-objects/run';
+import { appendBuildRow, buildRowFromFailure, buildRowFromResult } from './run-ledger';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { describeMirrorFill, describeMirrorWindows, describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, symmetryFillOn, symmetryOn, symmetryWindowsOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, isCellChunk, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, fastChunkIndices, isCellChunk, kdFastChunks, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
@@ -526,6 +531,14 @@ export interface StagedLocationRequest {
      * default.
      */
     district?: 'scan' | 'massing' | 'rebuilt' | 'kd' | (string & {});
+    /**
+     * Rebuild a district's street furniture automatically (staged-switches.ts streetObjectsAuto): the chat-facing
+     * `location_street_objects` tool's own report-only pass (street-objects/auto.ts), run as part of the build instead
+     * of waiting for someone to call the tool by hand. SCRATCHBOX_STAGED_STREET_OBJECTS changes the default (off).
+     */
+    streetObjects?: boolean;
+    /** With streetObjects: at most this many families go to Street View in one call. SCRATCHBOX_STAGED_STREET_OBJECTS_MAX_FAMILIES changes the default. */
+    streetObjectsMaxFamilies?: number;
     /**
      * Steps turned on or off for this build, by step key (TOGGLEABLE_STEPS in staged-build-steps.ts): the node graph's
      * toggles. A step not named keeps its default (its environment switch, else on).
@@ -1151,6 +1164,11 @@ const defaultFootprints = (place: { lat: number; lng: number }, radiusM: number)
 
 function errorMessage(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
+}
+
+/** The run record's path for a ledger row's proof, or undefined when the cache will not name one (a bad run id). */
+function runRecordPathOrUndefined(cache: StageCache, runId: string): string | undefined {
+    try { return cache.runRecordPath(runId); } catch { return undefined; }
 }
 
 function scanFitCode(err: unknown): string | undefined {
@@ -1948,6 +1966,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // longest builds start first and, with the pool in several regions, the largest land in different regions;
                 // otherwise nearest first
                 const area = (c: DistrictChunk) => (c.rect.x1 - c.rect.x0) * (c.rect.z1 - c.rect.z0);
+                // the largest building tasks marked for the fast VMs (SCRATCHBOX_KD_FAST_CHUNKS)
+                const fast = fastChunkIndices(plan, kdFastChunks());
                 const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort(plan.unit === 'building'
                     ? (a, b) => Number(b.centre) - Number(a.centre) || area(b) - area(a) || a.index - b.index
                     : (a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
@@ -2010,7 +2030,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             ...((s => s ? { steps: s } : {})(chunkSteps(plan, c, request.steps, kdBand()))),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
                         }, {
-                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,
+                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce, ...(fast.has(c.index) ? { fast: true } : {}),
                             // the district's frame when known already (the centre built here); else the centre job publishes it to the
                             // others (district-chunks.ts cutChunkLayer)
                             cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM }
@@ -2317,6 +2337,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // the place's versions are in the object store before this run's are offered to it (as the finish below does)
             if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
             keepSceneObjects(run, cache, outcome, scan, request.query, { isolate: false });
+            // one durable row for this build, outside the stage cache (run-ledger.ts): what was chosen, measured and decided
+            appendBuildRow(buildRowFromResult({ runId, request, result: outcome.result, runRecord: runRecordPathOrUndefined(cache, runId), artifactId }));
             return outcome;
         }
 
@@ -2539,16 +2561,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     type V = { textured: string; geometry: string; report: VehicleRemovalReport };
                     const entry = await cache.run<V>('vehicles', key, async dir => {
                         io.progress('reading the vehicles from above');
-                        const scan = t.scan ?? loadScanMesh(e.texturedGlb);
-                        const ground = buildGroundModel(scan, { cellMeters: 1, ...(look ? { water: look.waterAt, road: look.roadAt } : {}) });
                         // SCRATCHBOX_VEHICLES_MODEL: a model tried first for these reads (a faster one; not the default until a checked set shows it reads as well)
                         const vehicleModel = process.env.SCRATCHBOX_VEHICLES_MODEL?.trim();
                         const chain = new VisionModelChain<string>({ client: vis.client, candidates: vehicleModel ? [vehicleModel, ...vis.candidates.filter(m => m !== vehicleModel)] : vis.candidates, signal: io.signal, ...chainExtras('vehicles'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
-                        const out = await removeVehicles({
-                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, scan, ground, judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), outDir: dir, signal: io.signal, P: vehicleParams,
-                            look: { ...(look ? { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt } : {}), within: (x, z) => Math.hypot(x, z) <= covered },
-                            log: m => io.progress(m)
-                        });
+                        // the scan's load, its street model, the candidates, the crops, the surface infill and both patched GLBs run in a
+                        // worker thread (vehicle-removal-run.ts): live they held the main thread for minutes; the vision calls stay here
+                        const out = await removeVehiclesOffThread({
+                            texturedGlb: e.texturedGlb, geometryGlb: e.geometryGlb, ...(t.scan ? { scan: t.scan } : { scanGlb: e.texturedGlb }), groundOptions: { cellMeters: 1 },
+                            lookups: { ...(look ? { raster: { building: look.raster.building, water: look.raster.water, road: look.raster.road }, grid: look.grid } : {}), within: { radiusM: covered } },
+                            outDir: dir, P: vehicleParams
+                        }, { judge: visionVehicleJudge(chain), judgeMany: visionVehicleBatchJudge(chain), signal: io.signal, log: m => io.progress(m) });
                         if (out.report.failedCalls.length) throw new Error(`the vision model could not read ${out.report.failedCalls.length} of ${out.report.crops} crops (${out.report.failedCalls[0].error})`);
                         const rel = (p: string) => (path.dirname(p) === dir ? path.basename(p) : p);
                         return { value: { textured: rel(out.texturedGlb), geometry: rel(out.geometryGlb ?? e.geometryGlb), report: out.report } };
@@ -4317,6 +4339,56 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...inventory.buildings.map(b => toCatalog({ type: b.type, label: b.description, confidence: b.confidence, lo: b.lo, hi: b.hi }, 'scene-inventory')),
                         ...street.catalog.map(c => toCatalog({ type: c.type, label: c.reason, confidence: c.confidence, lo: c.lo, hi: c.hi }, 'district-residual-audit'))
                     ]);
+                    // -------- street objects, automatic (street-objects/auto.ts; staged-switches.ts streetObjectsAuto, off by default): the
+                    // same report-only pass location_street_objects runs by hand, over this build's own district audit, Street View only
+                    // for what the cheap read leaves unsure. Never touches the scan: a kept family's GLB is committed as its own layer
+                    // beside it (the matching scan residue is not yet carved out from underneath; see street-objects/auto.ts's header).
+                    if (streetObjectsAuto(request)) {
+                        const visionClient = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                        const sv = deps.streetView;
+                        const why = !sv ? 'no Street View service is configured' : missingCredentials(sv) ? `Street View credentials: ${missingCredentials(sv)}` : !visionClient ? 'no vision model is configured' : undefined;
+                        if (why) cache.writeRunNote(runId, 'street_objects', { skipped: `street furniture was not rebuilt automatically (${why}); the scan's own residue stands` });
+                        else try {
+                            const auditFull = (JSON.parse(fs.readFileSync(path.join(entry.dir, 'district_audit.json'), 'utf8')) as DistrictAuditResult).audit;
+                            const soKey = stageKey(STREET_OBJECTS_AUTO_VERSION, key, streetObjectsAutoMaxFamilies(request).toFixed(0));
+                            const soEntry = await cache.run<{ skipped?: string; blobStats: BlobReadReport['stats']; objectsStats?: StreetObjectsReport['stats']; kept: number; hasLayer: boolean }>('street-objects', soKey, async dir => {
+                                const chain = new VisionModelChain<string>({ client: visionClient!.client, candidates: visionClient!.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS, replyCache: stagedReplyCache(cache) });
+                                const result = await autoRebuildStreetObjects({
+                                    origin: geoOrigin, audit: auditFull, scanGlb: stripped.devegetatedGlb, tileGlb: extraction.texturedGlb, vector: ev, look, streetView: sv!, vision: chain,
+                                    store: modelReadingsStore(), outDir: dir, maxFamilies: streetObjectsAutoMaxFamilies(request),
+                                    ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(`street objects: ${m}`)
+                                });
+                                return {
+                                    value: {
+                                        ...(result.skipped ? { skipped: result.skipped } : {}), blobStats: result.blobs.stats,
+                                        ...(result.objects ? { objectsStats: result.objects.stats } : {}),
+                                        kept: result.objects?.families.filter(f => f.decision === 'rebuilt').length ?? 0, hasLayer: !!result.objects?.layerGlb
+                                    }
+                                };
+                            }, { publish: (dir, value) => (value.hasLayer ? [{ from: 'street_objects_layer.glb', as: `${base}_street_objects_${soKey.slice(0, 8)}.glb` }] : []) });
+                            const v = soEntry.value;
+                            cache.writeRunNote(runId, 'street_objects', { key: soKey, cached: soEntry.cached, dir: soEntry.dir, ...v });
+                            if (v.hasLayer && soEntry.published[0]) {
+                                const pub = soEntry.published[0];
+                                const layer: StagedLayer = {
+                                    objectId: layerObjectId(soKey, 'l1o'), stage: 'street-objects', layer: 'l1o', order: STAGES.trees.order, url: pub.url, bytes: pub.bytes,
+                                    provenance: {
+                                        label: PROVENANCE.photoInferred, measuredGeometry: false, confidence: v.objectsStats ? Math.round((v.kept / Math.max(1, v.objectsStats.families)) * 1000) / 1000 : 0,
+                                        method: 'Street furniture (bollards, posts, lamps, benches, signs, kiosks) rebuilt from registered Google Street View and the scan (street-objects/run.ts): each family\'s profile measured from its masks, built natively from solids of revolution, vertical sweeps and panels; kept only where it beats the scan\'s melted blob against the photos (silhouette IoU and colour)',
+                                        sources: [{ kind: 'streetview-grounding', id: `street-objects:${soKey.slice(0, 8)}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
+                                        note: `${v.kept} of ${v.objectsStats?.families ?? 0} families kept, checked against Street View; the rest stand as the scan already had them. This layer is additive: the matching scan residue under a kept family is not yet carved out from underneath it (street-objects/auto.ts), so the scan's own blob may still show alongside the rebuild until that splice lands.`
+                                    },
+                                    provenanceLabels: [PROVENANCE.photoInferred, PROVENANCE.generated], supersedes: [], revealAfter: [],
+                                    reveal: { durationMs: 1200, stagger: 0.3, crossfadeFrom: [] },
+                                    cached: soEntry.cached, builtAtMs: soEntry.builtAtMs, counts: layerCounts(pub.path)
+                                };
+                                run.commit(layer, { source: 'StreetObjectsAuto', resolvedAddress: placeValue!.formattedAddress, extra: { kept: v.kept, families: v.objectsStats?.families ?? 0 } });
+                            }
+                        } catch (err) {
+                            if (isAbort(err) || ctx.signal?.aborted) throw err;
+                            cache.writeRunNote(runId, 'street_objects', { error: `street objects could not be rebuilt automatically (${errorMessage(err)}); the scan's own residue stands, unchanged` });
+                        }
+                    }
                 } catch (err) {
                     if (isAbort(err) || ctx.signal?.aborted) return;
                     cache.writeRunNote(runId, 'scene_inventory', { error: `the scene inventory could not be built (${errorMessage(err)}); the build is unchanged, its streets unlabelled` });
@@ -7048,6 +7120,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
         if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
         keepSceneObjects(run, cache, outcome, extraction, request.query, { isolate: !!request.isolate, place: placeValue ? { name: placeValue.formattedAddress || request.query, lat: placeValue.lat, lng: placeValue.lng } : undefined });
+        // one durable row for this build, outside the stage cache (run-ledger.ts): what was chosen, measured and decided
+        appendBuildRow(buildRowFromResult({ runId, request, result: outcome.result, runRecord: runRecordPathOrUndefined(cache, runId), artifactId }));
         return outcome;
     } catch (err) {
         // the Street View fetch and the two branches are ended with the call: none is left running, or rejecting unseen, behind it
@@ -7069,6 +7143,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         try { cache.writeRunNote(runId, 'main_thread', blockTracer.stop()); } catch { /* the note is diagnostics only */ }
         try { cache.writeRunNote(runId, 'model_calls', modelCalls.report()); } catch { /* the note is diagnostics only */ }
         try { if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report()); } catch { /* the note is diagnostics only */ }
+        // a build that failed or was stopped is evidence too, and the commonest kind: it gets its row like any other
+        appendBuildRow(buildRowFromFailure({
+            runId, request,
+            outcome: run.state.runState === 'stopped' ? 'stopped' : 'failed',
+            reason: errorMessage(err),
+            place: { query: run.state.place.query, resolvedAddress: run.state.place.resolvedAddress, lat: run.state.place.lat, lng: run.state.place.lng },
+            stages: run.state.stages, degradations: run.state.degradations, cache: run.cacheStatus,
+            runRecord: runRecordPathOrUndefined(cache, runId)
+        }));
         throw err;
     }
 }

@@ -11,6 +11,7 @@ import { Request, Response, Router } from 'express';
 import * as os from 'os';
 import * as path from 'path';
 import { persistChatImages } from '../../../packages/core/src/node/gemini/chat-image-attachments';
+import { isKeyedProvider } from '../../../packages/core/src/node/chat-agent/provider-credentials';
 import { clientDisconnectedError, stagedRunRegistry } from '../../../packages/core/src/node/3d-engine/staged-location/staged-run-registry';
 import {
     GeminiService,
@@ -281,6 +282,34 @@ export function createGeminiRouter(services: GeminiRouterServices, ctx: RouteCon
     };
     router.post('/credentials', saveCredentials);
     router.post('/save-credentials', saveCredentials);
+
+    // The chat's model picker: models of every provider, each with whether this server has its key (never the key).
+    router.get('/chat-models', async (_req: Request, res: Response) => {
+        try {
+            res.json({ success: true, ...(await geminiService.listChatModels()) });
+        } catch (err: any) {
+            res.status(500).json({ success: false, models: [], error: err?.message || 'Failed to list chat models' });
+        }
+    });
+
+    // A Claude or OpenAI key from Settings > Models & AI, kept in the encrypted key store; an empty key clears it.
+    router.post('/provider-key', async (req: Request, res: Response) => {
+        const { provider, apiKey } = req.body || {};
+        if (!isKeyedProvider(provider)) {
+            res.status(400).json({ success: false, error: 'provider must be "anthropic" or "openai"' });
+            return;
+        }
+        if (apiKey !== undefined && typeof apiKey !== 'string') {
+            res.status(400).json({ success: false, error: 'apiKey must be a string' });
+            return;
+        }
+        try {
+            const result = await geminiService.saveProviderKey(provider, apiKey || '');
+            res.json({ success: true, provider, ...result });
+        } catch (err: any) {
+            res.status(500).json({ success: false, error: err?.message || 'Failed to save the key' });
+        }
+    });
 
     router.post('/tts', async (req: Request, res: Response) => {
         try {

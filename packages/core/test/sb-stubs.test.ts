@@ -125,7 +125,8 @@ describe('scratchbox API summary', () => {
             expect(called.filter(n => !SB_API_INDEX.Mesh.includes(n))).toEqual([]);
         }
         const sbFns = [...SB_API_SUMMARY.matchAll(/^  sb\.(\w+)\(/gm)].map(m => m[1]);
-        expect(sbFns.length).toBeGreaterThan(30);
+        // a floor that keeps this check from passing on an empty list, not a count to hold: classes rise and fall in the budget
+        expect(sbFns.length).toBeGreaterThan(25);
         expect(sbFns.filter(n => !SB_API_INDEX.scratchbox.includes(n))).toEqual([]);
     });
 

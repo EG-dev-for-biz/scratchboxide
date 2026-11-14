@@ -19,6 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { glbToTriangleSoup } from '../../3d-engine/part-connectivity';
 import { measureGlbBase64MeshCounts } from '../../../common/glb-mesh-counts';
+import { normalizePlacePickerRequest, type PlacePickerRequest } from '../../../common/spatial/place-picker';
 import { primitiveOutOfScopeReason } from '../../../common/product-scope';
 import { auditModelAgainstRequest, callVisionModel } from '../../3d-engine/visual-review';
 import type { ToolDeclaration, ToolHandler } from './types';
@@ -131,6 +132,17 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                             }
                         },
                         required: ['id', 'prompt', 'options']
+                    }
+                },
+                placePicker: {
+                    type: 'OBJECT',
+                    description: 'Show a Google map in the card for the user to click the place they mean, instead of typing an address. Use it whenever the question is where: which building, street, district or address to build. Give query (a place name or address to centre the map on) or lat and lng when a place was mentioned; give none to open on the world. Give radiusMeters (50 to 500) when the answer is an area such as a district or scene, and leave it out when it is one building or point. The answer comes back as "latitude, longitude" coordinates (and the radius of an area): pass those coordinates as the place to the build tool. With placePicker, questions may be an empty array.',
+                    properties: {
+                        message: { type: 'STRING', description: 'One or two sentences shown above the map: what will be made and one suggestion of a place to try' },
+                        query: { type: 'STRING', description: 'A place name or address to centre the map on' },
+                        lat: { type: 'NUMBER', description: 'Latitude of a centre already known, degrees' },
+                        lng: { type: 'NUMBER', description: 'Longitude of a centre already known, degrees' },
+                        radiusMeters: { type: 'NUMBER', description: 'For an area pick: the starting radius in metres (50 to 500). Omit for a single point.' }
                     }
                 }
             },
@@ -531,7 +543,7 @@ export const canvasHandlers: Record<string, ToolHandler> = {
     },
 
     ask_user_question(args, _ctx) {
-        const title = asString(args.title) || 'Clarification & Configuration Required';
+        const title = asString(args.title) || ((args.placePicker ?? args.place_picker) ? 'Where?' : 'Clarification & Configuration Required');
         const questionsRaw = Array.isArray(args.questions) ? args.questions : [];
         const questionCard = {
             title,
@@ -549,12 +561,17 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             }))
         };
 
+        const placePicker = normalizePlacePickerRequest(args.placePicker ?? args.place_picker);
+        if (placePicker) (questionCard as { placePicker?: PlacePickerRequest }).placePicker = placePicker;
+
         return {
             resultPayload: {
                 status: 'pending_user_answer',
                 questionCard
             },
-            summaryResult: `Presented clarifying question card to user: "${questionCard.questions[0]?.prompt || title}".`
+            summaryResult: placePicker
+                ? `Showed the user a map to pick the place on${placePicker.query ? `, centred on "${placePicker.query}"` : ''}. Wait for their pick.`
+                : `Presented clarifying question card to user: "${questionCard.questions[0]?.prompt || title}".`
         };
     },
 

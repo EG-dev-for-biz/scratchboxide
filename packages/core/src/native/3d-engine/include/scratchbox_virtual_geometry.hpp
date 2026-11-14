@@ -319,6 +319,8 @@ struct SourceMesh {
     /** Length of the glTF materials array. */
     uint32_t materialCount{0};
     uint32_t skippedPrimitives{0}; // primitives without a surface (points / lines) or without POSITION
+    uint32_t skippedLodLevels{0};       // coarser levels of a level-of-detail group, left out (visitNode)
+    uint64_t expandedInstances{0};      // EXT_mesh_gpu_instancing instances drawn
 };
 
 using Mat4 = std::array<double, 16>; // column-major
@@ -373,6 +375,26 @@ inline Mat4 nodeLocalMatrix(const Json& node) {
     return out;
 }
 
+/** The matrix of one translation (x, y, z), unit quaternion (x, y, z, w) and scale (x, y, z), as glTF composes them. */
+inline Mat4 mat4FromTrs(const double t[3], const double q[4], const double s[3]) {
+    const double qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    Mat4 out{};
+    out[0] = (1 - 2 * (qy * qy + qz * qz)) * s[0];
+    out[1] = (2 * (qx * qy + qz * qw)) * s[0];
+    out[2] = (2 * (qx * qz - qy * qw)) * s[0];
+    out[4] = (2 * (qx * qy - qz * qw)) * s[1];
+    out[5] = (1 - 2 * (qx * qx + qz * qz)) * s[1];
+    out[6] = (2 * (qy * qz + qx * qw)) * s[1];
+    out[8] = (2 * (qx * qz + qy * qw)) * s[2];
+    out[9] = (2 * (qy * qz - qx * qw)) * s[2];
+    out[10] = (1 - 2 * (qx * qx + qy * qy)) * s[2];
+    out[12] = t[0];
+    out[13] = t[1];
+    out[14] = t[2];
+    out[15] = 1;
+    return out;
+}
+
 inline double mat4Det3(const Mat4& m) {
     return m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
 }
@@ -418,7 +440,8 @@ public:
         const Json& required = root["extensionsRequired"];
         for (size_t i = 0; i < required.size(); ++i) {
             const std::string& ext = required[i].str;
-            if (ext == "KHR_draco_mesh_compression" || ext == "EXT_meshopt_compression" || ext == "KHR_mesh_quantization") {
+            // KHR_mesh_quantization is decoded (integer positions and texture coordinates, readComponent)
+            if (ext == "KHR_draco_mesh_compression" || ext == "EXT_meshopt_compression") {
                 throw GlbFormatError("GLB requires " + ext + ", which the virtual geometry builder does not decode; "
                                      "export the mesh uncompressed with float positions");
             }
@@ -452,7 +475,11 @@ private:
         if (scenes.size() > 0) {
             const Json& scene = scenes[index(root_["scene"], 0)];
             const Json& roots = scene["nodes"];
-            for (size_t i = 0; i < roots.size(); ++i) visitNode(index(roots[i]), mat4Identity(), 0);
+            const double finest = finestLodLevel(roots);
+            for (size_t i = 0; i < roots.size(); ++i) {
+                if (coarserLod(index(roots[i]), finest)) continue;
+                visitNode(index(roots[i]), mat4Identity(), 0);
+            }
         } else if (nodes.size() > 0) {
             std::vector<uint8_t> isChild(nodes.size(), 0);
             for (size_t n = 0; n < nodes.size(); ++n) {
@@ -481,9 +508,40 @@ private:
         if (node.isNull()) return;
         Mat4 world = mat4Mul(parent, nodeLocalMatrix(node));
         const Json& meshIdx = node["mesh"];
-        if (!meshIdx.isNull()) appendMesh(root_["meshes"][index(meshIdx)], world);
+        if (!meshIdx.isNull()) {
+            const Json& instancing = node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
+            if (instancing.type == Json::Object) appendInstances(root_["meshes"][index(meshIdx)], world, instancing);
+            else appendMesh(root_["meshes"][index(meshIdx)], world);
+        }
         const Json& children = node["children"];
-        for (size_t c = 0; c < children.size(); ++c) visitNode(index(children[c]), world, depth + 1);
+        const double finest = finestLodLevel(children);
+        for (size_t c = 0; c < children.size(); ++c) {
+            if (coarserLod(index(children[c]), finest)) continue;
+            visitNode(index(children[c]), world, depth + 1);
+        }
+    }
+
+    /**
+     * Levels of detail are sibling nodes carrying extras.sbLod.level (SB-Veggie writes each tree's levels as the children
+     * of one node). Of one set of siblings only the finest level present is built: the cluster hierarchy this builder
+     * makes is the level of detail, so a tree is drawn once and coarsened by screen error, not as every level stacked;
+     * a viewport snapshot that holds one level of a tree keeps it. The finest level among `list`, or -1 for none.
+     */
+    double finestLodLevel(const Json& list) const {
+        double finest = -1;
+        for (size_t i = 0; i < list.size(); ++i) {
+            const Json& level = root_["nodes"][index(list[i])]["extras"]["sbLod"]["level"];
+            if (level.type == Json::Number && (finest < 0 || level.num < finest)) finest = level.num;
+        }
+        return finest;
+    }
+
+    /** True (and counted) for a node that is a coarser level than the finest of its siblings. */
+    bool coarserLod(size_t nodeIndex, double finest) {
+        if (finest < 0) return false;
+        const Json& level = root_["nodes"][nodeIndex]["extras"]["sbLod"]["level"];
+        if (level.type == Json::Number && level.num > finest) { out_.skippedLodLevels++; return true; }
+        return false;
     }
 
     /** Non-negative integer field, `def` when absent. */
@@ -528,6 +586,61 @@ private:
         return bin_ + viewOffset + accOffset;
     }
 
+    /**
+     * EXT_mesh_gpu_instancing: the mesh once per instance, each at the node's frame times its own TRANSLATION, ROTATION
+     * and SCALE (float32, or the integer forms KHR_mesh_quantization allows). A missing attribute is the identity.
+     */
+    void appendInstances(const Json& mesh, const Mat4& world, const Json& attributes) {
+        struct Attr { const uint8_t* data{nullptr}; size_t stride{0}, comp{0}; int64_t ct{0}; bool norm{false}; size_t count{0}; };
+        auto read = [&](const char* name, size_t components) {
+            Attr a;
+            const Json& idx = attributes[name];
+            if (idx.isNull()) return a;
+            const Json& acc = root_["accessors"][index(idx)];
+            a.ct = acc["componentType"].asInt(0);
+            a.comp = componentBytes(a.ct);
+            if (a.comp == 0 || acc["type"].str != (components == 4 ? "VEC4" : "VEC3")) {
+                throw GlbFormatError(std::string("EXT_mesh_gpu_instancing ") + name + " must be " + (components == 4 ? "VEC4" : "VEC3") + " of float32 or 8 or 16-bit integers");
+            }
+            a.norm = acc["normalized"].type == Json::Bool && acc["normalized"].b;
+            a.data = accessorData(acc, a.comp * components, a.stride, a.count);
+            return a;
+        };
+        const Attr t = read("TRANSLATION", 3), r = read("ROTATION", 4), s = read("SCALE", 3);
+        const size_t count = t.data ? t.count : r.data ? r.count : s.data ? s.count : 0;
+        if ((t.data && t.count != count) || (r.data && r.count != count) || (s.data && s.count != count)) {
+            throw GlbFormatError("EXT_mesh_gpu_instancing attributes differ in count");
+        }
+        for (size_t i = 0; i < count; ++i) {
+            double tr[3] = {0, 0, 0}, q[4] = {0, 0, 0, 1}, sc[3] = {1, 1, 1};
+            for (int k = 0; k < 3 && t.data; ++k) tr[k] = readComponent(t.data + i * t.stride + k * t.comp, t.ct, t.norm);
+            for (int k = 0; k < 4 && r.data; ++k) q[k] = readComponent(r.data + i * r.stride + k * r.comp, r.ct, r.norm);
+            for (int k = 0; k < 3 && s.data; ++k) sc[k] = readComponent(s.data + i * s.stride + k * s.comp, s.ct, s.norm);
+            // integer quaternions are normalized only approximately; renormalize so the instance keeps its size
+            const double qn = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+            if (qn > 1e-12) for (double& c : q) c /= qn; else { q[0] = q[1] = q[2] = 0; q[3] = 1; }
+            appendMesh(mesh, mat4Mul(world, mat4FromTrs(tr, q, sc)));
+            out_.expandedInstances++;
+        }
+    }
+
+    /** Bytes of one component: float32, (u)int16 or (u)int8; 0 for any other type. */
+    static size_t componentBytes(int64_t ct) {
+        return ct == 5126 ? 4 : (ct == 5122 || ct == 5123) ? 2 : (ct == 5120 || ct == 5121) ? 1 : 0;
+    }
+
+    /** One component as a float: glTF's normalization (signed max(c / 127, -1), unsigned c / 255, and the 16-bit forms), else the raw value. */
+    static float readComponent(const uint8_t* e, int64_t ct, bool normalized) {
+        switch (ct) {
+            case 5126: { float f; std::memcpy(&f, e, 4); return f; }
+            case 5123: { uint16_t c; std::memcpy(&c, e, 2); return normalized ? c / 65535.0f : float(c); }
+            case 5122: { int16_t c; std::memcpy(&c, e, 2); return normalized ? std::max(c / 32767.0f, -1.0f) : float(c); }
+            case 5121: return normalized ? e[0] / 255.0f : float(e[0]);
+            case 5120: { int8_t c = static_cast<int8_t>(e[0]); return normalized ? std::max(c / 127.0f, -1.0f) : float(c); }
+            default: return 0.0f;
+        }
+    }
+
     void appendMesh(const Json& mesh, const Mat4& world) {
         const Json& prims = mesh["primitives"];
         bool flip = mat4Det3(world) < 0;
@@ -539,18 +652,24 @@ private:
             const Json& posIdx = prim["attributes"]["POSITION"];
             if (posIdx.isNull()) { out_.skippedPrimitives++; continue; }
             const Json& posAcc = root_["accessors"][index(posIdx)];
-            if (posAcc["componentType"].asInt(0) != 5126 || posAcc["type"].str != "VEC3") {
-                throw GlbFormatError("glTF POSITION must be float32 VEC3");
+            // float32, or (KHR_mesh_quantization) 8 or 16-bit integers, normalized or not; the node's matrix carries
+            // the dequantization scale and offset
+            const int64_t posCt = posAcc["componentType"].asInt(0);
+            const size_t posComp = componentBytes(posCt);
+            if (posComp == 0 || posAcc["type"].str != "VEC3") {
+                throw GlbFormatError("glTF POSITION must be VEC3 of float32, or of 8 or 16-bit integers (KHR_mesh_quantization)");
             }
+            const bool posNorm = posAcc["normalized"].type == Json::Bool && posAcc["normalized"].b;
             size_t stride = 0, count = 0;
-            const uint8_t* src = accessorData(posAcc, 12, stride, count);
+            const uint8_t* src = accessorData(posAcc, posComp * 3, stride, count);
             if (uint64_t(out_.positions.size()) + count > kMaxSourceVertices) {
                 throw GlbFormatError("GLB scene has more than " + std::to_string(kMaxSourceVertices) + " vertices after instancing");
             }
             uint32_t base = static_cast<uint32_t>(out_.positions.size());
             for (size_t i = 0; i < count; ++i) {
                 float v[3];
-                std::memcpy(v, src + i * stride, 12);
+                for (int k = 0; k < 3; ++k) v[k] = readComponent(src + i * stride + k * posComp, posCt, posNorm);
+                if (!std::isfinite(v[0]) || !std::isfinite(v[1]) || !std::isfinite(v[2])) throw GlbFormatError("glTF POSITION has non-finite values");
                 double x = world[0] * v[0] + world[4] * v[1] + world[8] * v[2] + world[12];
                 double y = world[1] * v[0] + world[5] * v[1] + world[9] * v[2] + world[13];
                 double z = world[2] * v[0] + world[6] * v[1] + world[10] * v[2] + world[14];
@@ -563,25 +682,19 @@ private:
             if (!uvIdx.isNull()) {
                 const Json& uvAcc = root_["accessors"][index(uvIdx)];
                 if (uvAcc["type"].str != "VEC2") throw GlbFormatError("glTF TEXCOORD_0 must be VEC2");
-                int64_t ct = uvAcc["componentType"].asInt(0);
-                size_t es = ct == 5126 ? 8 : ct == 5123 ? 4 : ct == 5121 ? 2 : 0;
-                if (es == 0) throw GlbFormatError("glTF TEXCOORD_0 must be float32, u16 or u8");
+                // float32, normalized u16 / u8 (core glTF), or (KHR_mesh_quantization) signed or unnormalized integers;
+                // an unnormalized one is scaled by the material's KHR_texture_transform, which the path tracer does not
+                // read, so it is taken as is
+                const int64_t ct = uvAcc["componentType"].asInt(0);
+                const size_t comp = componentBytes(ct);
+                if (comp == 0) throw GlbFormatError("glTF TEXCOORD_0 must be float32 or 8 or 16-bit integers");
+                const bool uvNorm = ct == 5126 || (uvAcc["normalized"].type == Json::Bool && uvAcc["normalized"].b);
                 size_t ustride = 0, ucount = 0;
-                const uint8_t* usrc = accessorData(uvAcc, es, ustride, ucount);
+                const uint8_t* usrc = accessorData(uvAcc, comp * 2, ustride, ucount);
                 if (ucount != count) throw GlbFormatError("glTF TEXCOORD_0 count differs from POSITION count");
                 for (size_t i = 0; i < count; ++i) {
                     const uint8_t* e = usrc + i * ustride;
-                    if (es == 8) {
-                        float uv[2];
-                        std::memcpy(uv, e, 8);
-                        uvs[i] = F2(uv[0], uv[1]);
-                    } else if (es == 4) {
-                        uint16_t uv[2];
-                        std::memcpy(uv, e, 4);
-                        uvs[i] = F2(uv[0] / 65535.0f, uv[1] / 65535.0f);
-                    } else {
-                        uvs[i] = F2(e[0] / 255.0f, e[1] / 255.0f);
-                    }
+                    uvs[i] = F2(readComponent(e, ct, uvNorm), readComponent(e + comp, ct, uvNorm));
                     if (!std::isfinite(uvs[i].x) || !std::isfinite(uvs[i].y)) throw GlbFormatError("glTF TEXCOORD_0 has non-finite values");
                 }
             }

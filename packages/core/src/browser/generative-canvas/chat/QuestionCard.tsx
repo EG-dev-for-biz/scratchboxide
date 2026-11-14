@@ -9,11 +9,13 @@
 
 import React, { useState } from 'react';
 import type { InteractiveQuestionCardData } from '../canvas-types';
+import { formatPlacePick, type PlacePick } from '../../../common/spatial/place-picker';
+import { PlacePicker } from './PlacePicker';
 
 export interface QuestionCardProps {
     card: InteractiveQuestionCardData;
     messageId: string;
-    onSubmit: (answerText: string, selectedOptions: Record<string, string[]>) => void;
+    onSubmit: (answerText: string, selectedOptions: Record<string, string[]>, pickedPlace?: PlacePick) => void;
     disabled?: boolean;
 }
 
@@ -42,6 +44,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     });
 
     const isSubmitted = !!card.submitted;
+    // the map's pick (common/spatial/place-picker.ts), when the card asks where
+    const [pickedPlace, setPickedPlace] = useState<PlacePick | undefined>(card.pickedPlace);
+    const needsPlace = !!card.placePicker && !pickedPlace;
 
     const toggleOption = (qId: string, optId: string, allowMultiple: boolean) => {
         if (isSubmitted || disabled) return;
@@ -70,11 +75,13 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                 answerParts.push(`${q.prompt}: ${chosenLabels.join(', ')}`);
             }
         }
-        const summaryText = answerParts.length > 0
-            ? `[Clarification Selection]: ${answerParts.join(' | ')}`
-            : 'Proceed with default recommended configuration.';
-
-        onSubmit(summaryText, selections);
+        const selectionText = answerParts.length > 0 ? `[Clarification Selection]: ${answerParts.join(' | ')}` : '';
+        if (card.placePicker) {
+            if (!pickedPlace) return;
+            onSubmit([formatPlacePick(pickedPlace), selectionText].filter(Boolean).join(' '), selections, pickedPlace);
+            return;
+        }
+        onSubmit(selectionText || 'Proceed with default recommended configuration.', selections);
     };
 
     return (
@@ -93,7 +100,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '13px' }}>❓</span>
                     <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--sb-text-label, #f4f4f5)', letterSpacing: '-0.01em' }}>
-                        {card.title || 'Clarification & Configuration Required'}
+                        {card.title || (card.placePicker ? 'Where?' : 'Clarification & Configuration Required')}
                     </span>
                 </div>
                 {isSubmitted && (
@@ -102,6 +109,10 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                     </span>
                 )}
             </div>
+
+            {card.placePicker && (
+                <PlacePicker request={card.placePicker} value={pickedPlace} onChange={setPickedPlace} readOnly={isSubmitted || disabled} />
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 {card.questions.map((q) => {
@@ -185,7 +196,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                         type="button"
                         className="sb-btn sb-btn-primary sb-btn-xs"
                         onClick={handleSubmit}
-                        disabled={disabled}
+                        disabled={disabled || needsPlace}
                         style={{
                             padding: '6px 14px',
                             fontSize: '11px',
@@ -194,10 +205,11 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                             background: '#2563eb',
                             color: '#ffffff',
                             border: 'none',
-                            cursor: 'pointer'
+                            cursor: needsPlace ? 'not-allowed' : 'pointer',
+                            opacity: needsPlace ? 0.5 : 1
                         }}
                     >
-                        Confirm Choice &amp; Proceed
+                        {card.placePicker ? 'Use this place' : <>Confirm Choice &amp; Proceed</>}
                     </button>
                 </div>
             )}

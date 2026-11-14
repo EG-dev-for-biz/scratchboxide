@@ -47,6 +47,7 @@ import { combineProfiles, profileFromSilhouette, type SilhouetteProfile } from '
 import { planHeadingOf, streetObjectSpec, type StreetObjectSpec } from './object-spec';
 import { frontOutline, frontSpec, squareness } from './front-outline';
 import { CHECK_PARAMS, checkView, judgeFamily, overlayOutlines, scaledCamera, type FamilyCheck, type ViewCheck } from './check';
+import { cropJpeg, LOOK_CHECK_PARAMS, lookCheckPrompt, maskCropBox, parseLookCheck, type LookCheck } from './look-check';
 import { castPiece, planAxis, splitMember } from './split';
 import { renderTriangles } from '../photo-match-eval';
 import { encodePng } from '../png-encode';
@@ -139,6 +140,8 @@ export interface FamilyReport {
     glb?: string;
     buildError?: string;
     check?: FamilyCheck;
+    /** The vision model's look at a rebuild that passed the measures, beside its Street View crop (look-check.ts). */
+    lookCheck?: LookCheck | { error: string };
     /** Overlay PNGs (overlays: true), per checked view. */
     overlays?: string[];
     /** With overlays: the scan and the scan with the rebuild in it, from 1.6 m eye height (walk mode's), as PNGs. */
@@ -647,6 +650,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         // ---- 6. check, at each usable view, against its member's blob
         const rebuiltSoup = readTileTriangles(glb);
         const checks: ViewCheck[] = [];
+        const lookInputs: Array<{ k: number; mask: Uint8Array; rebuild: TileTriangles }> = [];
         for (const { rv, k } of usable) {
             const v = views[k], im = images.get(v)!;
             const here = family.members.filter(m => m.clusterId === cidOf(k));
@@ -654,8 +658,10 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             let mask = rv.mask!;
             if (split && rv.pieces?.length) { mask = new Uint8Array(rv.mask!.length); for (const pc of rv.pieces) if (pc.mask) for (let i = 0; i < mask.length; i++) if (pc.mask[i]) mask[i] = 1; }
             const photo = decodeImageInMemory(im.bytes);
+            const placedRebuild = mergeSoups(here.map(m => translated(rebuiltSoup, m.foot)));
+            lookInputs.push({ k, mask, rebuild: placedRebuild });
             const vc = checkView({
-                id: im.id, cam: cams[k], photo, mask, rebuild: mergeSoups(here.map(m => translated(rebuiltSoup, m.foot))), scan: subsetTriangles(scanSoup, key => keys.has(key)),
+                id: im.id, cam: cams[k], photo, mask, rebuild: placedRebuild, scan: subsetTriangles(scanSoup, key => keys.has(key)),
                 context: meshWithout(tileMesh, keys), axis: { foot: here[0].foot, heightM: here[0].heightM }, bands: reading.look.bands ?? [], keepMasks: !!tileSoup, anchor: rv.footVisible ? 'foot' : 'top'
             });
             if (tileSoup && vc.masks) {
@@ -667,6 +673,42 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             checks.push(vc);
         }
         rep.check = judgeFamily(checks);
+        // the last bar: a vision check of the rebuild beside its Street View crop (look-check.ts), at the view with the most
+        // photo pixels; anything short of "same kind of object, believable" keeps the scan
+        if (rep.check.keep) {
+            const best = checks.reduce((b, c, i) => (c.photoPixels > checks[b].photoPixels ? i : b), 0);
+            const li = lookInputs[best], v = views[li.k], im = images.get(v)!;
+            let look: LookCheck | { error: string };
+            try {
+                const photo = decodeImageInMemory(im.bytes);
+                const box = maskCropBox(li.mask, photo.width, photo.height);
+                if (!box) throw new Error('the view\'s mask is empty');
+                const drawn = renderTriangles([li.rebuild], cams[li.k], { supersample: 1 });
+                // the rebuild's crop where the check aligned it onto the photo's mask (its shift, at the check's render scale)
+                const sh = checks[best].shiftRebuildPx ?? [0, 0], dx = Math.round(sh[0] / CHECK_PARAMS.renderScale), dy = Math.round(sh[1] / CHECK_PARAMS.renderScale);
+                const cw = cams[li.k].width, chh = cams[li.k].height;
+                const rbox: [number, number, number, number] = [Math.max(0, box[0] - dx), Math.max(0, box[1] - dy), Math.min(cw, box[2] - dx), Math.min(chh, box[3] - dy)];
+                const own = new AbortController();
+                const timer = setTimeout(() => own.abort(new Error(`the look check took longer than ${LOOK_CHECK_PARAMS.timeoutMs / 1000} s`)), LOOK_CHECK_PARAMS.timeoutMs);
+                try {
+                    const r = await input.vision.generate({
+                        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/jpeg', data: cropJpeg(photo, box).toString('base64') } }, { inlineData: { mimeType: 'image/jpeg', data: cropJpeg({ width: cw, height: chh, rgba: drawn.rgba }, rbox[2] > rbox[0] && rbox[3] > rbox[1] ? rbox : box).toString('base64') } }, { text: lookCheckPrompt(reading.look.description) }] }],
+                        config: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: LOOK_CHECK_PARAMS.maxOutputTokens, abortSignal: input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal }
+                    }, { stage: 'street-objects' });
+                    visionCalls++;
+                    if (r.cached) cachedCalls++;
+                    look = parseLookCheck((r.response.candidates?.[0]?.content?.parts ?? []).filter(p => !(p as { thought?: boolean }).thought).map(p => p.text ?? '').join(''));
+                    if (!('error' in look)) r.remember();
+                } finally { clearTimeout(timer); }
+            } catch (err) {
+                if (input.signal?.aborted) throw err;
+                look = { error: err instanceof Error ? err.message : String(err) };
+            }
+            rep.lookCheck = look;
+            if ('error' in look || !look.sameKind || !look.believable) {
+                rep.check = { ...rep.check, keep: false, reason: `the scan stays: ${'error' in look ? `the look check could not be made (${look.error})` : `the look check answered ${look.sameKind ? 'the same kind' : 'not the same kind'} of object, ${look.believable ? 'believable' : 'not believable'} (${look.why})`}; the measures passed (${rep.check.reason.replace(/^kept: /, '')})` };
+            } else rep.check = { ...rep.check, reason: `${rep.check.reason}; the look check: the same kind of object, believable (${look.why})` };
+        }
         if (tileSoup) eyeJobs.push({ rep, fam: family, soup: rebuiltSoup, side: [leadCam.eye[0], leadCam.eye[2]] });
         rep.decision = rep.check.keep ? 'rebuilt' : 'scan-kept';
         rep.decisionReason = rep.check.reason;

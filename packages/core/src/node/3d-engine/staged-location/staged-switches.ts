@@ -73,6 +73,32 @@ export function stagedDistrict(request: { district?: string }, env: NodeJS.Proce
     return isDistrictMode(asked) ? asked : stagedDistrictMode(env);
 }
 
+/**
+ * SCRATCHBOX_STAGED_STREET_OBJECTS=1 rebuilds a district's street furniture (bollards, posts, lamps, benches, signs,
+ * kiosks) automatically as part of the build, the same report-only pass the chat-facing `location_street_objects` tool
+ * runs by hand (street-objects/auto.ts): the cheap read first (no Street View), then Street View and the native rebuild
+ * only for what it leaves unsure, each kept only where it beats the scan's blob against the photos. Off by default: a
+ * real district build (Penn Station) needs to be judged by eye, Street View's paid calls measured, before this flips.
+ */
+export function streetObjectsAutoEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_STAGED_STREET_OBJECTS?.trim() === '1';
+}
+
+/** Whether this build rebuilds street objects automatically: the request's choice, else the environment's. */
+export function streetObjectsAuto(request: { streetObjects?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+    return typeof request.streetObjects === 'boolean' ? request.streetObjects : streetObjectsAutoEnabled(env);
+}
+
+/** At most this many families go to Street View in one automatic call, unless the request or SCRATCHBOX_STAGED_STREET_OBJECTS_MAX_FAMILIES says fewer (never more: the cap exists to bound paid calls, not to be raised past what was measured safe). */
+export const STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT = 12;
+
+/** The automatic pass's family cap: the request's, else the environment's, else STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT. */
+export function streetObjectsAutoMaxFamilies(request: { streetObjectsMaxFamilies?: number }, env: NodeJS.ProcessEnv = process.env): number {
+    if (typeof request.streetObjectsMaxFamilies === 'number' && Number.isFinite(request.streetObjectsMaxFamilies) && request.streetObjectsMaxFamilies > 0) return Math.floor(request.streetObjectsMaxFamilies);
+    const v = Number(env.SCRATCHBOX_STAGED_STREET_OBJECTS_MAX_FAMILIES);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : STREET_OBJECTS_AUTO_MAX_FAMILIES_DEFAULT;
+}
+
 /** The new setting that does what a pipeline letter asked for. */
 function letterReplacement(v: string): string {
     if (v === 'i') return 'SCRATCHBOX_STAGED_BUILDING_PIPELINE=j and SCRATCHBOX_STAGED_MODEL_SERVICE=trellis';

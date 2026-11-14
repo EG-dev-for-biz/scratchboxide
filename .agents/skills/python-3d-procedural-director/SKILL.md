@@ -362,3 +362,76 @@ p.root_hint = (0.0, 0.0, 0.0)
 file_result = sb.rig.rig_glb("tail.glb", "tail_rigged.glb", p, {"Chain1": "Tail"}, "tail.sbrig.json")
 print(file_result, file_result.chains)            # read chain end positions, then rename / add hints
 ```
+
+## 7. Scenes Built for a Shot (`sb.shot`)
+
+When the request describes a view (a camera height, a lens, a frame) or the scene is too large to detail everywhere (a street, a district, an interior seen from one side), declare the shot before building anything and size every detail from it.
+
+```python
+import random
+import scratchbox as sb
+
+# One layout, written once: every shared number lives here and nothing below repeats one.
+STREET_W, PAVEMENT_W, STOREY_H, BAY_W = 24.0, 6.0, 3.6, 3.0
+BLOCK_D, LOT_W, LOTS, FIRST_Z = 20.0, 18.0, 14, 40.0
+FRONT_X = STREET_W / 2 + PAVEMENT_W                     # each row's facade line, measured from the street's centre
+hero = sb.shot(position=(0.0, 160.0, 110.0), target=(0.0, 8.0, -260.0), focal_mm=31.5, aspect=2.39, width_px=1920, name="hero")
+rng = random.Random(7)
+
+def window_parts(at):
+    """Ask about the window's opening, not its reveal: a recess reads by its opening and the shadow it throws."""
+    if not hero.resolves(1.2, at=at):     # the opening itself does not read: the storey is a darker band at most
+        return None
+    return {
+        "reveal_m": max(0.25, hero.member_m(0.25, at=at)),   # never shallower than a real reveal
+        "mullion_m": hero.member_m(0.08, at=at),             # thin members thickened just enough to show
+        "frame": hero.resolves(0.6, at=at),                  # a frame inside the opening only once it has room to read
+    }
+
+def building(side, z0):
+    """One lot: the mass, then each storey's windows on the street face, as detailed as the shot resolves there."""
+    storeys = rng.randint(6, 14)
+    h = storeys * STOREY_H + rng.uniform(0.0, 1.5)          # parapets differ between neighbours
+    face_x = side * FRONT_X
+    mass = sb.create_box(width=BLOCK_D, height=h, depth=LOT_W - 0.4)
+    mass.translate(face_x + side * BLOCK_D / 2, h / 2, z0)
+    for s in range(1, storeys):
+        y = s * STOREY_H + 1.4
+        for b in range(int((LOT_W - 2.0) // BAY_W)):
+            z = z0 - LOT_W / 2 + 1.5 + (b + 0.5) * BAY_W + rng.uniform(-0.005, 0.005)   # millimetre offsets
+            parts = window_parts((face_x, y, z))
+            if parts is None:
+                continue
+            d = parts["reveal_m"]
+            # the reveal as a surround standing proud of the face (it overlaps the mass, so it touches it)
+            for dz, dy, w, hh in ((-0.65, 0.0, 0.1, 1.9), (0.65, 0.0, 0.1, 1.9), (0.0, -0.95, 1.4, 0.12), (0.0, 0.95, 1.4, 0.1)):
+                bar = sb.create_box(width=d, height=hh, depth=w)
+                bar.translate(face_x - side * d / 2 + side * 0.02, y + dy, z + dz)
+                mass.append(bar)
+            if parts["frame"]:
+                m = parts["mullion_m"]
+                mullion = sb.create_box(width=m, height=1.8, depth=m)
+                mullion.translate(face_x - side * m / 2 + side * 0.02, y, z)
+                mass.append(mullion)
+    mass.set_material(sb.PbrMaterial.clay())
+    return mass
+
+scene = sb.Scene()
+ground = sb.create_box(width=2 * (FRONT_X + BLOCK_D) + 10.0, height=0.2, depth=LOTS * LOT_W + 20.0)
+ground.translate(0.0, -0.1, FIRST_Z - LOTS * LOT_W / 2)
+ground.set_material(sb.PbrMaterial.clay())
+scene.add_mesh(ground)
+for side in (-1, 1):                                      # looking down -z, frame left is -x
+    for lot in range(LOTS):
+        scene.add_mesh(building(side, FIRST_Z - (lot + 0.5) * LOT_W))
+sb.io.write_glb(OUTPUT_GLB_PATH, scene)
+```
+
+- Test `resolves` on a feature's overall size (the opening, the balcony, the tank, the car), never on its thinnest member, and build its bars, rails, mullions and reveals at `hero.member_m(real_size, at=point)`. Leaving out a fire escape because its 4 cm bars are under 2 px loses something 1.4 m deep that the shot plainly shows.
+- `hero.resolves(size_m, at=point)`, `hero.member_m(size_m, at=point)`, `hero.pixels(size_m, at=point)`, `hero.min_feature_m(at=point)` and `hero.sees(point)` answer for one shot; `sb.shot_plan.resolves(size_m, at)` asks every declared shot, so detail seen from any declared angle is kept.
+- The scene opens on the first shot declared, the visual review looks through it, and the result's shot detail budget gives the share of in-frame triangles under 2 px and the parts that hold them. Rebuild those parts coarser and move the triangles to what stands nearest the lens: the viewport holds about a million vertices.
+- Block the scene out as plain massing from the layout first and check it with `hero.sees(...)`; add detail only after the blockout frames correctly. Put what the request places left or right of frame where `hero.frame_point(x, y, depth)` says (x from -1 at the left edge to 1 at the right): looking down -z, frame left is -x, and guessing the axis mirrors the whole scene.
+- Vary repeats with the seeded generator by amounts a real place has (pane offsets of millimetres, parapet heights, rooftop objects off the grid), keeping each variation above the budget where it stands.
+- A moving camera: declare a shot per key pose and join them with `sb.camera_move([(0, start), (40, end)])`; the timeline plays it.
+- Sun, sky and haze are set after the build with `atmosphere_configure_scene`, only when the request asks for them. A street reads deepest backlit (the sun low and ahead of the camera); `hazeScaleHeightMeters` makes the haze hug the ground so the far street fades while rooftops stay clear.
+
