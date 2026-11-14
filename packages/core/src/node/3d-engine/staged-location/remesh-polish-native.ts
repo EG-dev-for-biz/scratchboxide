@@ -77,6 +77,7 @@ export function ensureRemeshPolishBinary(repoRoot = findTileRefineRepoRoot()): P
 /** The polish input's native steps built before it runs: the lattice (its cut and stitch), the clip and the infill (or seal, and their textured fill) run synchronously and cannot compile. */
 export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string; clip?: boolean; base?: unknown; closure?: unknown }): Promise<void> {
     // the inner core is native only
+    if (process.env.SCRATCHBOX_K_PARTITION_SHELL === '1' && input.orthosDir) await (await import('./pipeline-k/partition-shell')).ensurePartitionShellBinary();
     if (input.closure || ((input.infill || input.seal) && (kNative('infill') || kNative('fill-texture'))) || (input.clip && input.base && kNative('clip')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch') || kNative('fill-texture')))) await ensureRemeshPolishBinary();
 }
 

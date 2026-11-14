@@ -161,6 +161,23 @@ for each open loop:
 Never shrink-wrap a scene into one closed shell: that destroys measured detail. A visible grey cap is worse than a
 small honest hole.
 
+### 3.4b Thin things standing on a solid
+A mast, a lattice, a pole, a crane or rooftop plant stands on a roof but encloses nothing, so an inside test fooled by
+its back faces (or a fitter that closes gaps at its working volume's edge) grows tall solid columns around it.
+```
+roof levels: heights where the whole structure shows real up-facing area (a few m2 of platform on a mast is not one)
+for each region that reaches above the scan:
+    cut it at the highest roof level with roof inside its own footprint,
+        else the highest level no higher than the scan's top over that footprint,
+        else the highest level it spans            (never leave it whole to be called air: that drills a shaft)
+    below the cut: decided as before; above the cut: air
+what stood above stays measured scan, or a fitted solid of revolution when it is round as a whole
+```
+Check it by sampling points through the body (a grid finer than the thinnest column) for inside before and after: no
+point may go from inside to outside below the scan's top. Code: `scratchbox_shell_fit.hpp` `roofLevels`,
+`capCellsAtRoof` (`topIsAir`), with round parts first (`revolutionParts`, `scratchbox_revolution_fit.hpp`
+`endAtNonRound`).
+
 ### 3.5 Inside-out surfaces
 Turn a triangle only when outside views see its back and hardly its front, **and** a ray along its normal hits the
 object (it faces inward). A surface seen from behind that faces open air (an overhang's underside, the far side of a
