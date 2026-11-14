@@ -48,7 +48,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
 import { GoogleTileDistrictCrawler } from '../../../spatial/GoogleTileDistrictCrawler';
-import { accessorLayout, assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type Mat4, type ParsedGlb } from '../glb-bytes';
+import { accessorLayout, assembleGlb, dropPrimitives, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type Mat4, type ParsedGlb } from '../glb-bytes';
 import { districtBuildingIndex, type DistrictFootprint } from './district-buildings';
 
 export const DISTRICT_CHUNKS_VERSION = 'district-chunks/3';  // 3: every building the circle reaches is planned whole, or left out (M2a)
@@ -506,6 +506,7 @@ class GlbEdit {
  * primitive gets new indices.
  */
 function cutGlb(e: GlbEdit, toPlan: Mat4, keep: (x: number, z: number) => boolean, whole: boolean): JoinReport {
+    const emptied = new Set<object>();
     const { glb, json } = e;
     const local = nodeWorldMatrices(json);
     let removed = 0, kept = 0, piecesKept = 0, piecesRemoved = 0;
@@ -558,11 +559,14 @@ function cutGlb(e: GlbEdit, toPlan: Mat4, keep: (x: number, z: number) => boolea
             const cut = count / 3 - n;
             removed += cut; kept += n;
             if (!cut) continue;
+            // nothing left of it: the primitive goes (dropPrimitives), never an empty index list
+            if (!n) { emptied.add(prim); continue; }
             const out = new Uint32Array(n * 3);
             for (let t = 0, o = 0; t + 2 < count; t += 3) if (keepTri[t / 3]) { out[o++] = vi(t); out[o++] = vi(t + 1); out[o++] = vi(t + 2); }
             prim.indices = e.accessor(new Uint8Array(out.buffer), 34963, { componentType: 5125, count: out.length, type: 'SCALAR' });
         }
     });
+    dropPrimitives(json, emptied);
     return { keptTriangles: kept, removedTriangles: removed, ...(whole ? { pieces: { kept: piecesKept, removed: piecesRemoved } } : {}) };
 }
 

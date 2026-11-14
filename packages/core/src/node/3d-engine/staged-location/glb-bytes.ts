@@ -175,6 +175,36 @@ export function invert(m: Mat4): Mat4 {
     return inv;
 }
 
+/**
+ * Takes the given primitives out of a document: a cut that removes every triangle of a primitive must drop the
+ * primitive, not leave it with an empty index list. glTF gives an accessor at least one element and a mesh at least one
+ * primitive, and a reader handed an empty list can take the primitive for un-indexed and draw its vertices in order
+ * (the native path tracer's loader did: a building cut out of a district came back as scrambled triangles).
+ * A mesh left with no primitive is removed, the nodes that drew it keep their place and lose their mesh, and the meshes
+ * after it are renumbered. Node indices do not change. Returns the primitives dropped.
+ */
+export function dropPrimitives(json: any, emptied: ReadonlySet<object>): number {
+    if (!emptied.size) return 0;
+    let dropped = 0;
+    const remap = new Map<number, number>(), meshes: any[] = [];
+    (json.meshes ?? []).forEach((mesh: any, mi: number) => {
+        const keep = (mesh.primitives ?? []).filter((p: object) => !emptied.has(p));
+        dropped += (mesh.primitives ?? []).length - keep.length;
+        if (!keep.length) return;
+        mesh.primitives = keep;
+        remap.set(mi, meshes.length);
+        meshes.push(mesh);
+    });
+    if (meshes.length === (json.meshes ?? []).length) return dropped;
+    json.meshes = meshes;
+    for (const node of json.nodes ?? []) {
+        if (node.mesh === undefined) continue;
+        const to = remap.get(node.mesh);
+        if (to === undefined) delete node.mesh; else node.mesh = to;
+    }
+    return dropped;
+}
+
 /** Assembles GLB bytes from a glTF JSON object and its binary chunk. */
 export function assembleGlb(json: unknown, bin: Uint8Array): Buffer {
     const pad = (b: Buffer, fill: number) => (b.length % 4 ? Buffer.concat([b, Buffer.alloc(4 - (b.length % 4), fill)]) : b);

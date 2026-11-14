@@ -552,6 +552,9 @@ private:
         Accessor col = accessor(ctx, attrs["COLOR_0"].asInt(-1));
         Accessor tan = accessor(ctx, attrs["TANGENT"].asInt(-1));
         Accessor idx = accessor(ctx, prim["indices"].asInt(-1));
+        // a primitive that names an index list is drawn by it or not at all: an empty or unreadable list (a cut that removed
+        // every triangle once left one) is no triangles, never the vertices taken in order
+        if (prim["indices"].asInt(-1) >= 0 && !idx.valid()) return;
         const bool hasNormals = nrm.valid() && nrm.components == 3 && nrm.count == pos.count;
         const bool hasUv = uv.valid() && uv.components == 2 && uv.count == pos.count;
         const bool hasColor = col.valid() && (col.components == 3 || col.components == 4) && col.count == pos.count;

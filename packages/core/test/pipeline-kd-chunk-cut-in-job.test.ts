@@ -172,9 +172,12 @@ function chunkFrame(place: { lat: number; lng: number }, cx: number, cz: number,
 function shown(glb: ParsedGlb) {
     const { json } = glb;
     const world = nodeWorldMatrices(json);
+    // what is drawn: a primitive holding no triangle draws nothing, so the legacy join's emptied primitives (kept with an empty
+    // index list) and the cut's dropped ones (dropPrimitives) show the same; a mesh is named by what it is, not by its index
+    const drawnPrims = (mi: number) => json.meshes[mi].primitives.filter((p: any) => (p.indices !== undefined ? json.accessors[p.indices].count : json.accessors[p.attributes.POSITION].count) > 0);
     const nodes = (json.nodes ?? []).map((n: any, ni: number) => ({
-        name: n.name, extras: n.extras, children: n.children, mesh: n.mesh, world: Array.from(world[ni]),
-        prims: n.mesh === undefined ? undefined : json.meshes[n.mesh].primitives.map((p: any) => {
+        name: n.name, extras: n.extras, children: n.children, mesh: n.mesh === undefined || !drawnPrims(n.mesh).length ? undefined : { name: json.meshes[n.mesh].name, extras: json.meshes[n.mesh].extras }, world: Array.from(world[ni]),
+        prims: n.mesh === undefined || !drawnPrims(n.mesh).length ? undefined : drawnPrims(n.mesh).map((p: any) => {
             const idx = p.indices !== undefined ? readAccessor(glb, p.indices).data : undefined;
             const attrs = Object.keys(p.attributes).sort();
             const data = Object.fromEntries(attrs.map(a => [a, readAccessor(glb, p.attributes[a])]));
@@ -191,7 +194,7 @@ function shown(glb: ParsedGlb) {
         const v = json.bufferViews[im.bufferView];
         return { mimeType: im.mimeType, bytes: Array.from(glb.bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength)) };
     });
-    const meshes = (json.meshes ?? []).map((m: any) => ({ name: m.name, extras: m.extras }));
+    const meshes = (json.meshes ?? []).filter((_: unknown, mi: number) => drawnPrims(mi).length > 0).map((m: any) => ({ name: m.name, extras: m.extras }));
     return { asset: json.asset, scene: json.scene, scenes: json.scenes, materials: json.materials, textures: json.textures, images, meshes, nodes };
 }
 

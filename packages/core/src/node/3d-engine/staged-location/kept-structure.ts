@@ -26,7 +26,7 @@
 
 import type { Media4DObject } from '../../../browser/generative-canvas/canvas-types';
 import type { StagedBuildState, StagedLayer } from '../../../common/spatial/staged-location-contracts';
-import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from './glb-bytes';
+import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, dropPrimitives } from './glb-bytes';
 
 export type Vec3 = [number, number, number];
 
@@ -269,6 +269,7 @@ export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootpr
     let binLength = glb.bin.byteLength + ((4 - (glb.bin.byteLength % 4)) % 4);
     let removed = 0, kept = 0;
     // a mesh used by several nodes is trimmed once, by the first node that draws it
+    const emptied = new Set<object>();
     const done = new Set<number>();
     (json.nodes ?? []).forEach((node: any, ni: number) => {
         if (node.mesh === undefined || done.has(node.mesh)) return;
@@ -300,6 +301,8 @@ export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootpr
             removed += cut;
             kept += keep.length / 3;
             if (!cut) continue;
+            // nothing left of it: the primitive goes (dropPrimitives), never an empty index list
+            if (!keep.length) { emptied.add(prim); continue; }
             const data = new Uint8Array(new Uint32Array(keep).buffer);
             json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: data.byteLength, target: 34963 });
             json.accessors.push({ bufferView: json.bufferViews.length - 1, componentType: 5125, count: keep.length, type: 'SCALAR' });
@@ -309,6 +312,7 @@ export function hideFootprintInGlb(bytes: Uint8Array, footprint: StructureFootpr
         }
     });
     if (!removed) return { glb: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), removedTriangles: 0, keptTriangles: kept, groundY };
+    dropPrimitives(json, emptied);
     const bin = new Uint8Array(binLength);
     bin.set(glb.bin, 0);
     let o = glb.bin.byteLength + ((4 - (glb.bin.byteLength % 4)) % 4);
