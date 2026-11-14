@@ -262,6 +262,45 @@ comes from the source resolution. Not better, or worse: the roof cells read as l
 plant; the top storeys are blocky in both; the pier strips add bright white bands and piers low on one wall whose
 rounded ends look like an artefact; and the upper wall's window grid is less even than the coarse twin's.
 
+## Procedural shells for every building, roads removed (user's idea, tried 2026-11-13)
+
+The idea: smooth each building with procedural geometry in its own scanned shape, carve and emboss the detail, texture
+it from the photogrammetry, and remove the roads and everything on them.
+
+What ran, on the cached Penn tile with no model calls: every building with a footprint of 40 m2 or more whose middle
+lies in the tile (14 buildings, 43,981 m2 of footprint) cut out by its footprint and rebuilt by the twin generator:
+tier prisms from its height map, recessed windows where its wall photos gave them (K's window fit and arrays), swept
+ledges, roof blocks, relief blocks standing 0.3 m or more off the shell, roof cells and wall detail from the scan's
+photo. No ground layer was kept, so the roads, vehicles and street clutter are gone.
+
+| Measure | Value |
+|---|---|
+| Buildings built / failed | 14 / 0 (one on its first pass) |
+| Time | 6 min (cut 52 s, shells 5 min in a pool of 4) |
+| Windows carved | 1,972, on 4 buildings |
+| Size | 86 MB, against the scan's 23.5 MB |
+| Plan overlap with the scan (shell against its cut-out, 1 m cells) | 0.73 for the district; 0.87-0.97 on ten buildings, 0.42 on the worst |
+| Roof heights within 1 m of the scan | 66 % of the shared plan (within 3 m: 89 %) |
+
+By eye, from matching path-traced views:
+
+- **It can be done for box-like buildings.** The two large towers come out with flat walls, sharp corners and the
+  scan's own photo on them, standing where the scan's do, and the streets are gone.
+- **Not "exactly the same shape".** The shells are prisms of each setback tier with squared outlines. Round or
+  irregular buildings lose their shape: the arena becomes a fan of flat wedges (plan overlap 0.42), and the station's
+  glazed entrance and low podium become plain grey boxes with no texture.
+- **Texture is limited by the tile.** Small faces and billboards come out as coarse blocks; the slab's top storeys are
+  bleached.
+- **No bevel.** The generator has no chamfer or bevel setting. Carving (recessed windows) and embossing (ledges, roof
+  blocks, relief blocks) exist; bevelled edges would have to be added (pipeline K's lattice has a 5 cm chamfer rule
+  that could be reused).
+- **Buildings whose middle lies past the tile are missing,** and with no ground the district floats.
+
+A fault found on the way, in the twin generator (PR #189): it adds the street level twice. Given a street level g, the
+shell's base comes out at 2g and its top g too high (tested on one building at g = 0, 5.5 and 11 m). At Penn every
+shell today sat about 5 m too high; at the ESB the level is near zero, which hid it. For this trial each shell was
+lowered by its street level afterwards. It needs fixing in the generator.
+
 ## What this plan does not claim
 
 - The twin has been judged on one building (the ESB). Nothing yet says a district of twins beats K-D or the scan.
