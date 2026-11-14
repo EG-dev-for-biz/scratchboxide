@@ -302,6 +302,44 @@ shell today sat about 5 m too high; at the ESB the level is near zero, which hid
 lowered by its street level afterwards. Fixed in the generator the same day (PR #189, 097d0f1a: the level is taken
 out of the tiers once; a box at three street levels and Penn 2 from its K records checked).
 
+## Shell plus the scan's difference, tried on the ESB (2026-11-14)
+
+The rethought method: a clean shell for the bulk, the scan carried on it as a difference, and the difference sorted by
+size (under 0.3 m and shapeless: dropped as scanning error; 0.3-0.6 m: relief; 0.6 m or more: the scan's geometry kept).
+
+**The measurement** (the raw cut-out scan against the twin's shell, 1.2 million even samples, nearest shell point):
+
+| Part | Seen area | Within 0.3 m | 0.3-0.6 m | 0.6 m or more |
+|---|---|---|---|---|
+| Base, under 25 m | 36,600 m2 | 49 % | 17 % | 34 % |
+| Shaft, 25-300 m | 106,800 m2 | 79 % | 10 % | 11 % |
+| Crown, 300-332 m | 13,100 m2 | 70 % | 19 % | 11 % |
+| Mast, above 332 m | 6,000 m2 | 64 % | 31 % | 5 % |
+| Whole building | 162,500 m2 | 71 % | 13 % | 16 % |
+
+"Seen" leaves out the 47 % of the raw scan's area that lies 0.6 m or more inside the shell: surfaces inside the
+building (the tiles' cut faces and back-to-back interior), never visible from outside. The sign (inside or outside) is
+taken from the nearest shell point's normal and is unreliable at corners.
+
+So the method's premise holds where it was expected to: the shaft is shell (its map is green all over), and the base
+and the crown's buttresses are where the scan departs.
+
+**The model.** Built with the generator's existing switches, not new code: the wall's own photo in place of the storey
+median (`orthoBlend 1`), and scan kept where it stands 0.6 m (then 0.4 m) outside the shell (`scanDetailM`).
+
+- It does not deliver the design. `orthoBlend` still falls back to the storey median wherever the photo disagrees with
+  it, so the wall texture is not a straight projection: on the shaft it reads more uniform than the scan, with fewer
+  of the one-off lit windows.
+- The kept scan (2,591 m2 at 0.6 m; 3,408 m2 at 0.4 m) arrives as loose slabs at the mast's foot, not as a surface
+  joined to the shell. The crown is still worse than the scan.
+- The thin dark plates round the mast's foot in every twin are the generator's own fin blocks (`slenderFins`), not scan
+  fragments. Turning them off makes the crown cleaner.
+- The base's walls come out clean, and the scan's broken corner at the cut is replaced by flat wall.
+
+What this settles: the sorting is sound and cheap to measure; the two missing pieces named in the design are the ones
+that matter. A projection that puts the scan's photo and its distance onto the shell as they are, and a join that
+welds kept scan to the shell, have to be written; the generator's switches do not stand in for them.
+
 ## What this plan does not claim
 
 - The twin has been judged on one building (the ESB). Nothing yet says a district of twins beats K-D or the scan.
