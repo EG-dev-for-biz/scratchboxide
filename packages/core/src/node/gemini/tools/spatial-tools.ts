@@ -100,6 +100,7 @@ import {
 import { findTileRefineRepoRoot } from '../../3d-engine/tile-refine-service';
 import type { ToolContext, ToolDeclaration, ToolHandler, ToolHandlerOutcome, ToolParameterSchema, ToolResultPayload } from './types';
 import { STAGED_MATERIAL_MODE_DECLARATION, STAGED_MATERIAL_MODE_TOOL, runStagedMaterialModeTool } from './staged-material-mode-tool';
+import { MEASURED_TWIN_DECLARATION, MEASURED_TWIN_TOOL, runMeasuredTwinTool } from './measured-twin-tool';
 import { anchorOffset, offsetObjects, partitionActiveScene } from '../../3d-engine/staged-location/kept-structure';
 import { applySunToScene } from './atmosphere-tools';
 import type { CanvasArtifact, Scene3DData, SceneCameraLens } from '../../../browser/generative-canvas/canvas-types';
@@ -138,6 +139,7 @@ function describeTileExtent(result: Google3DTile3DObjectResult): string {
 
 export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
     STAGED_MATERIAL_MODE_DECLARATION,
+    MEASURED_TWIN_DECLARATION,
     {
         name: 'google_3d_tiles_get_full_texture',
         description: 'Ingest real-world geographic coordinates or address as a photorealistic, full-texture 3D GLB object rendered from Google Maps Photorealistic 3D Tiles at highest leaf LOD quality (errorTarget <= 0.5, 4K screen-space error budget). Returns glbBuffer, glbPath, and geometric mesh statistics.',
@@ -776,6 +778,8 @@ export const google3DTilesHandlers: Record<string, ToolHandler> = {
     google_3d_tiles_get_clay: (args, ctx) => extractLocation('google_3d_tiles_get_clay', args, ctx, 'clay'),
 
     [STAGED_MATERIAL_MODE_TOOL]: (args, ctx) => runStagedMaterialModeTool(args, ctx),
+
+    [MEASURED_TWIN_TOOL]: (args, ctx) => runMeasuredTwinTool(args, ctx),
 
     google_3d_tiles_clay_blockout_runner: async (args, _ctx) => {
         const query = asString(args.query);

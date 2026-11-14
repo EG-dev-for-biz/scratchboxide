@@ -64,8 +64,9 @@ export function decodeImageInMemory(bytes: Uint8Array): RgbaImage8 {
         return { width: d.width, height: d.height, rgba: new Uint8Array(d.rgba.buffer, d.rgba.byteOffset, d.rgba.byteLength) };
     }
     if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-        // a road layer embeds a 4096 x 4096 photo render: more than the default 256 MB decode allowance
-        const d = decodeJpegInMemory(bytes, 1024);
+        // a road layer embeds a 4096 x 4096 photo render (more than the default 256 MB decode allowance), and the measured
+        // twin an 8192-wide atlas of its walls' and roofs' photos (8192 x 5992 on the Empire State Building: past 1 GB)
+        const d = decodeJpegInMemory(bytes, 2048);
         return { width: d.width, height: d.height, rgba: d.data };
     }
     throw new Error('tile texture is neither PNG nor JPEG; it cannot be decoded in memory');

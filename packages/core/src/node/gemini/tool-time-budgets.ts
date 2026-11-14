@@ -84,6 +84,10 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // One block extraction, a structure pick per building, the tree strip, the per-triangle split and one GLB pair per
     // building; with the mask vote, a render, vision outlines and an isolate per building.
     location_split_block: { maxMs: 45 * MIN, idleMs: 15 * MIN },
+    // The measured twin: the generator alone well under a minute; infer and hybrid add the photometry, pipeline K's
+    // straightening, window fit, facade reader (up to 24 planes), system read, arrays and symmetry (the first call also
+    // builds its native binaries), the finish read and relief images: the ESB's cold hybrid took 5.7 min.
+    location_measured_twin: args => (args.hybrid === true || args.infer === true ? { maxMs: 30 * MIN } : { maxMs: 15 * MIN }),
     // The first call compiles the native audit binary (up to 10 min); an audit itself takes well under a minute per layer.
     location_residual_audit: { maxMs: 15 * MIN },
     // Pano discovery, the grounding images (12 at a time), one registration, then a vision read, a native build and the
