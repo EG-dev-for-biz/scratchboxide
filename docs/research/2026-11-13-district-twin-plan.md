@@ -299,7 +299,8 @@ By eye, from matching path-traced views:
 A fault found on the way, in the twin generator (PR #189): it adds the street level twice. Given a street level g, the
 shell's base comes out at 2g and its top g too high (tested on one building at g = 0, 5.5 and 11 m). At Penn every
 shell today sat about 5 m too high; at the ESB the level is near zero, which hid it. For this trial each shell was
-lowered by its street level afterwards. It needs fixing in the generator.
+lowered by its street level afterwards. Fixed in the generator the same day (PR #189, 097d0f1a: the level is taken
+out of the tiers once; a box at three street levels and Penn 2 from its K records checked).
 
 ## What this plan does not claim
 
