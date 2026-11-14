@@ -364,8 +364,19 @@ def place_view(view, mean, sv, quat, col, op, depth, photo_depth=None, eye_heigh
     }
 
 
+# what the capture vehicle drove through is empty: the scan within this of the eye on the plan, and this far over the street
+SWEPT_RADIUS_M = 2.5
+SWEPT_MIN_HEIGHT_M = 0.3
+
+
 def eye_height_over_scan(job, all_depth):
-    """The eye's height over the scan's street, from the middle of the floor view's scan depth; None without one."""
+    """
+    The eye's height over the scan's street, from the floor view's scan depth; None without one.
+
+    The middle of the view, unless the view's lowest broad surface lies well under it: then the scan holds something
+    there that the capture vehicle drove through (a vehicle the aerial survey caught standing in the road, flat-topped
+    or not), and that lowest surface is the street.
+    """
     for v in job["views"]:
         if v["kind"] != "floor":
             continue
@@ -373,8 +384,34 @@ def eye_height_over_scan(job, all_depth):
         depth = all_depth[int(v["depthOffset"]):int(v["depthOffset"]) + n * n].reshape(n, n)
         mid = depth[n * 2 // 5:n * 3 // 5, n * 2 // 5:n * 3 // 5]
         mid = mid[mid < EMPTY]
-        return float(np.median(mid)) if len(mid) >= 100 else None
+        if len(mid) < 100:
+            return None
+        middle, lowest = float(np.median(mid)), float(np.percentile(depth[depth < EMPTY], 90))
+        return lowest if lowest - middle > SWEPT_MIN_HEIGHT_M else middle
     return None
+
+
+def clear_swept(depth, view, eye_height, radius=SWEPT_RADIUS_M, min_height=SWEPT_MIN_HEIGHT_M):
+    """
+    The scan's depth at a view with what the capture vehicle drove through taken out: a scan surface within `radius` of
+    the eye on the plan that stands more than `min_height` over the street is replaced by the street behind it along the
+    same ray. Returns (depth, pixels changed). The view's depth is along its axis; the scan frame's y is up.
+    """
+    n, f = int(view["size"]), float(view["focalPx"])
+    right, up, fwd = (np.array(view[k], float) for k in ("right", "up", "fwd"))
+    j, i = np.meshgrid(np.arange(n) + 0.5 - n / 2, np.arange(n) + 0.5 - n / 2)
+    ray = j[..., None] * right - i[..., None] * up + f * fwd          # per pixel, with unit depth along the axis at |.| = f
+    has = depth < EMPTY
+    point = ray * (np.where(has, depth, 0.0) / f)[..., None]          # the scan surface, relative to the eye
+    height = point[..., 1] + eye_height                               # over the street
+    lump = has & (np.hypot(point[..., 0], point[..., 2]) < radius) & (height > min_height) & (point[..., 1] < 0)
+    if not lump.any():
+        return depth, 0
+    down = ray[..., 1] < -1e-6
+    street = np.where(down, eye_height / np.maximum(-ray[..., 1], 1e-6) * f, EMPTY)   # axis depth where the ray meets the street
+    out = depth.copy()
+    out[lump] = np.where(down[lump], street[lump], EMPTY)
+    return out, int(lump.sum())
 
 
 FRAMING_GRID = 160
@@ -514,12 +551,17 @@ def run_pano(job):
         img = np.asarray(Image.open(io.BytesIO(base64.b64decode(v["jpegBase64"]))).convert("RGB"))
         mean, sv, quat, col, op = _predict(model, dev, img, float(v["focalPx"]) * img.shape[1] / n)
         depth = all_depth[int(v["depthOffset"]):int(v["depthOffset"]) + n * n].reshape(n, n)
+        swept = 0
+        if eye_height:
+            depth, swept = clear_swept(depth, v, eye_height)
         photo = None
         if v.get("photoDepth"):
             p = v["photoDepth"]
             photo = all_depth[int(p["offset"]):int(p["offset"]) + int(p["width"]) * int(p["height"])].reshape(int(p["height"]), int(p["width"]))
         placed, report = place_view(v, mean, sv, quat, col, op.reshape(-1), depth, photo, eye_height)
         report["inferS"] = round(time.time() - t1, 1)
+        if swept:
+            report["sweptCleared"] = swept
         views.append(report)
         if placed is not None:
             rows.append(placed)

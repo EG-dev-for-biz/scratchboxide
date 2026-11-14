@@ -29,6 +29,11 @@
  * and would otherwise be baked into the street as splats. The edit is `generated`, and is used only where it holds the
  * photograph's framing (edges compared over small shifts); otherwise the photograph is drawn and the view's report says why.
  *
+ * The eye's height over the street is read from the scan under it. Where the scan holds something there that the capture
+ * vehicle drove through (a vehicle the aerial survey caught standing in the road), the street is the lowest broad surface
+ * of the straight-down view, and the scan within 2.5 m of the eye that stands over the street is replaced by the street
+ * behind it, in every view of that panorama (`sweptCleared`): otherwise the whole panorama reads as off the scan.
+ *
  * Each view is then cleaned, every drop counted in its report: splats hanging between a near and a far surface of the view
  * (the streaks a per-pixel prediction leaves at depth edges), splats well behind the scan, and, in a view under half of
  * which lands on the scan, everything that does not (the view is dropped when little is left); a panorama with fewer than
@@ -68,7 +73,7 @@ import { GoogleMediaCredentialsService } from '../google-media-credentials-servi
 import { fetchStreetViewPanoTiles } from './street-view-tiles';
 
 /** Part of the world cache's key: a world built with another version of this step is another world. */
-export const SHARP_STREET_VERSION = 6;
+export const SHARP_STREET_VERSION = 7;
 export const SHARP_CHECKPOINT_NAME = 'sharp_2572gikvuh.pt';
 export const SHARP_LICENCE_NOTE = "SHARP weights: Apple's research-only model licence";
 /** A panorama's views: four level, a quarter turn apart, and one straight down. Square, in pixels and degrees. */
@@ -191,6 +196,8 @@ export interface SharpViewReport {
     /** Why the street top was not applied, when it was not. */
     streetTop?: string;
     inferS?: number;
+    /** Scan pixels cleared because the capture vehicle drove through what the scan holds there (a vehicle the aerial survey caught). */
+    sweptCleared?: number;
     /** Drawn from the photo with its vehicles and people removed by the image model (`generated`); else why not. */
     cleared?: boolean;
     clearedNote?: string;

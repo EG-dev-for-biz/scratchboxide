@@ -83,7 +83,7 @@ describe('SHARP street splats', () => {
         });
         expect(report.ran).toBe(false);
         expect(!report.ran && report.reason).toMatch(/SHARP street step failed/);
-        expect(SHARP_STREET_VERSION).toBe(6);
+        expect(SHARP_STREET_VERSION).toBe(7);
         expect(fs.readFileSync(base).equals(rows)).toBe(true);
         expect(fs.existsSync(path.join(tmp, 'work'))).toBe(false);
     });
@@ -160,6 +160,42 @@ print(json.dumps({"east": centre(90, 0), "west": centre(270, 0), "up30": centre(
         expect(out.eastLeft).toBeGreaterThan(44); expect(out.eastLeft).toBeLessThan(48);
         expect(out.eastRight).toBeGreaterThan(132); expect(out.eastRight).toBeLessThan(136);
         expect(out.eastTop).toBeGreaterThan(40);
+    });
+
+    it.skipIf(!hasNumpy)('reads the street under the eye past something the capture vehicle drove through, and clears it from the scan', () => {
+        const out = worker(`
+n = 200
+f = n / 2 / np.tan(np.radians(50))
+floor = {"kind": "floor", "size": n, "focalPx": f, "depthOffset": 0, "eye": [0, 2.3, 0], "right": [1, 0, 0], "up": [0, 0, -1], "fwd": [0, -1, 0]}
+flat = np.full((n, n), 2.3, np.float32)
+lump = flat.copy()
+lump[60:140, 70:150] = 1.1            # something 1.2 m high under and beside the eye
+clean = w.eye_height_over_scan({"views": [dict(floor)]}, flat.reshape(-1))
+over = w.eye_height_over_scan({"views": [dict(floor)]}, lump.reshape(-1))
+cleared, changed = w.clear_swept(lump.astype(np.float64), floor, over)
+# a level view: a wall 1.5 m ahead standing 1 m over the street (in the swept radius), and one 6 m ahead (outside it)
+level = {"kind": "level", "size": n, "focalPx": f, "eye": [0, 2.3, 0], "right": [1, 0, 0], "up": [0, 1, 0], "fwd": [0, 0, -1]}
+near = np.full((n, n), 1.5); far = np.full((n, n), 6.0)
+near_out, near_changed = w.clear_swept(near, level, 2.3)
+far_out, far_changed = w.clear_swept(far, level, 2.3)
+rows = np.arange(n) + 0.5 - n / 2
+bottom = n - 1                         # the lowest row looks down the steepest: its ray meets the street nearest
+print(json.dumps({"clean": round(clean, 3), "over": round(over, 3), "changed": changed, "lumpLeft": int((cleared < 2.0).sum()),
+                  "floorNow": round(float(cleared[100, 100]), 3), "nearChanged": int(near_changed), "farChanged": int(far_changed),
+                  "nearBottom": round(float(near_out[bottom, n // 2]), 3), "expectBottom": round(2.3 * f / rows[bottom], 3),
+                  "nearTopKept": float(near_out[0, n // 2])}))
+`);
+        expect(out.clean).toBe(2.3);
+        expect(out.over).toBe(2.3);
+        // every lump pixel is replaced by the street behind it
+        expect(out.changed).toBe(6400);
+        expect(out.lumpLeft).toBe(0);
+        expect(out.floorNow).toBe(2.3);
+        // the near wall goes where it stands between 0.3 m over the street and the eye's height; above the eye it stays
+        expect(out.nearChanged).toBeGreaterThan(0);
+        expect(out.nearBottom).toBe(out.expectBottom);
+        expect(out.nearTopKept).toBe(1.5);
+        expect(out.farChanged).toBe(0);
     });
 
     it.skipIf(!hasNumpy)('holds an edit that only removed something, and refuses one that moved or replaced the view', () => {
