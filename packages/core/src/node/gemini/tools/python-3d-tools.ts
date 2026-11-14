@@ -821,9 +821,21 @@ export function sbVeggieOf(glb: Buffer): { generator: 'SB-Veggie'; trees: number
 }
 
 /** Copies a GLB into public/models (when it is not already there) and returns its /models URL; errors propagate. */
-export function publishToModels(glbPath: string): string {
+function modelsDir(): string {
     const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
-    const canonicalModelsDir = path.resolve(repoRoot, 'public/models');
+    return path.resolve(repoRoot, 'public/models');
+}
+
+/** The file behind a `/models/<name>` URL that publishToModels gave, when it exists. */
+export function publishedModelPath(url: unknown): string | undefined {
+    const m = typeof url === 'string' ? /^\/models\/([^/\\?#]+\.glb)$/.exec(url) : null;
+    if (!m) return undefined;
+    const p = path.join(modelsDir(), m[1]);
+    return fs.existsSync(p) ? p : undefined;
+}
+
+export function publishToModels(glbPath: string): string {
+    const canonicalModelsDir = modelsDir();
     const fileName = path.basename(glbPath);
     const canonicalDest = path.join(canonicalModelsDir, fileName);
     if (path.resolve(glbPath) !== canonicalDest) {
